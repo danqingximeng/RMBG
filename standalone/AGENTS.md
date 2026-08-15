@@ -84,12 +84,12 @@ alias rmbg='/path/to/本仓库/rmbg'   # 可选：加进 shell 配置
 ## 守护生命周期实测（8123/8126/8127/8131-8134 端口，biref-lite）
 
 - 预载模型 RSS ≈ 766MB；闲置超时 `unload_all()` 后降到 ≈ 490-500MB（大模型如 birefnet 回落到 486MB 更明显；小模型因 glibc 不归还内存 RSS 可能降幅小，但权重已释放可复用）。
-- `[idle 30s] unloading model weights` 只打印一次（第二次闲置时模型已空，幂等跳过）。
+- 卸载已由 `any_model_loaded()` 门控：只在确有权重驻留时打印并执行 `unload_all()`，空模型闲置周期不刷日志（曾无条件打印导致每 idle-unload-min 刷一条）。
 - managed 自杀：`--idle-kill-min 0.2` 启动后 `[idle 15s] managed daemon exiting (idle-kill)`，~15s 进程自行退出（`os._exit(0)`）。
 - **serve 晋升**：CLI 拉起 managed 守护 → `./rmbg serve --port X` 打印 "promoted to manual" 退出 0；`/health` 的 `managed` 从 true 翻 false；进程存活过原自杀阈值（证明晋升生效）；日志见 `POST /api/managed 200`。
 - serve 各分支：已 manual → "nothing to start" 退出 0；非 RMBG 服务占端口 → 报错退出 1；空闲 → 正常启动。
 - **pgrep/pkill 坑**：`pkill -f "standalone.rmbg_web"` 会匹配执行命令的 shell 自身导致挂起超时；`pgrep -f` 也会匹配 shell 包装进程（误报另一 pid）。务必用不自匹配的括号模式 `pgrep -f "[s]tandalone.rmbg_web"`。测试验证后台常驻进程时，**优先用启动时记下的真实 pid**（wrapper 下 `$!` 是 shell 包装 pid，`exec python` 后真实 python pid 不同，日志 "Started server process [PID]" 才是真实 pid）。
 - **serve 与预载竞态**：`serve` 探测端口时若另一进程正处预载（未 bind），会被当空闲并抢占端口，先占者后 bind 失败退出。真实场景（CLI 拉起时 spawn_daemon 已等 daemon_alive；serve 在前则进程已就绪）不会触发，未做特殊处理。
 - **stdout 重定向块缓冲**：`> log 2>&1` 拉起的守护，python stdout 是块缓冲（~8KB），`[idle]` 等 print 不会立刻落盘（用 `model_loaded`/RSS 验证行为更可靠）。要看实时日志加 `PYTHONUNBUFFERED=1`。
-- **`_idle_thread` 已加 try/except**：`unload_all()` 异常只打印不退出循环（避免一次异常让监控线程永久死亡）。
+- **`_idle_thread` 已加 try/except**：`unload_all()` 异常只打印不退出循环（避免一次异常让监控线程永久死亡）。卸载分支用 `rmbg_core.any_model_loaded()` 门控，避免空模型重复打印。
 - CLI 转发实测：CLI 24.1s（含拉起 ~5s），复用 23.1s，本地回退 28.6s（输出分别标记 daemon/daemon/local）。

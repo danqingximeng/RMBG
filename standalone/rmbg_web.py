@@ -178,11 +178,12 @@ def _idle_thread():
                 print(f"[idle {idle:.0f}s] managed daemon exiting (idle-kill)")
                 os._exit(0)
         elif _state["idle_unload_min"] > 0 and idle > _state["idle_unload_min"] * 60:
-            print(f"[idle {idle:.0f}s] unloading model weights")
-            try:
-                rmbg_core.unload_all()
-            except Exception as e:
-                print(f"[idle] unload failed: {e}")
+            if rmbg_core.any_model_loaded():
+                print(f"[idle {idle:.0f}s] unloading model weights")
+                try:
+                    rmbg_core.unload_all()
+                except Exception as e:
+                    print(f"[idle] unload failed: {e}")
             _state["t"] = time.monotonic()
 
 
