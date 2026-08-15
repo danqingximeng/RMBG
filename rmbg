@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# RMBG CLI/daemon wrapper — works from any working directory.
+#
+#   ./rmbg -l                              # list model aliases
+#   ./rmbg /path/to/img.png -o /path/out   # process (auto daemon or local)
+#   ./rmbg serve --port 8123               # manual daemon / WebUI
+#
+# Optional: alias rmbg='/path/to/this/repo/rmbg'
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ "$1" = "serve" ]; then
+  shift
+  PYTHONPATH="$DIR" exec "$DIR/.venv/bin/python" -m standalone.rmbg_web "$@"
+fi
+PYTHONPATH="$DIR" exec "$DIR/.venv/bin/python" -m standalone.rmbg_cli "$@"

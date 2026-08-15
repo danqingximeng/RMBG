@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RMBG 去背景</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    font-family: system-ui, sans-serif; margin: 0; background: #14161a; color: #e6e6e6;
+    display: flex; flex-direction: column; height: 100vh; height: 100dvh;
+  }
+  header {
+    flex: none; display: flex; align-items: center; gap: 12px;
+    padding: 10px 16px; font-size: 17px; font-weight: 600; border-bottom: 1px solid #2a2d34;
+  }
+  #sideToggle {
+    background: #2a2d34; color: #e6e6e6; border: 1px solid #3a3f4a; border-radius: 7px;
+    padding: 4px 10px; font-size: 16px; line-height: 1; cursor: pointer;
+  }
+  main { flex: 1; min-height: 0; padding: 20px; transition: margin-left .25s ease; }
+  @media (max-width: 900px) { main { padding: 8px; } }
+  @media (min-width: 901px) { body.open main { margin-left: 320px; } }
+  .panel {
+    position: fixed; top: 0; bottom: 0; left: 0; width: min(85vw, 320px);
+    overflow-y: auto; background: #1d2026; border-right: 1px solid #2a2d34;
+    padding: 16px; z-index: 60;
+    transform: translateX(-105%); transition: transform .25s ease;
+  }
+  body.open .panel { transform: translateX(0); }
+  .backdrop {
+    position: fixed; inset: 0; background: rgba(0,0,0,.5); opacity: 0; pointer-events: none;
+    transition: opacity .25s; z-index: 55;
+  }
+  body.open .backdrop { opacity: 1; pointer-events: auto; }
+  @media (min-width: 901px) { .backdrop { display: none; } }
+  .sheet-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+  .sheet-head span { font-size: 14px; font-weight: 600; color: #9aa0aa; }
+  label { display: block; font-size: 13px; color: #9aa0aa; margin: 12px 0 4px; }
+  select, input[type=number], input[type=range] { width: 100%; }
+  select, input[type=number] {
+    background: #262a32; color: #e6e6e6; border: 1px solid #333842;
+    border-radius: 6px; padding: 7px 9px; font-size: 14px;
+  }
+  .btn {
+    display: inline-block; background: #3b82f6; color: #fff; border: 0;
+    border-radius: 7px; padding: 10px 14px; font-size: 14px; cursor: pointer;
+  }
+  .btn:disabled { background: #333842; cursor: not-allowed; }
+  .btn.secondary { background: #2a2d34; color: #e6e6e6; }
+  .btn.ghost { background: transparent; border: 1px solid #3a3f4a; color: #e6e6e6; }
+  .btn.small { padding: 6px 10px; font-size: 13px; }
+  .run { width: 100%; margin-top: 16px; padding: 12px; font-size: 15px; }
+  #status { font-size: 13px; color: #9aa0aa; margin-top: 12px; min-height: 18px; }
+  .row { display: flex; gap: 8px; align-items: center; }
+  .row input[type=checkbox] { width: auto; }
+  .val { color: #3b82f6; font-size: 12px; margin-left: 4px; }
+  .viewer {
+    position: relative; min-height: 0; height: 100%; border-radius: 10px; overflow: hidden;
+    background: #0f1114; border: 1px solid #2a2d34;
+  }
+  .viewer img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; display: block; }
+  .drop {
+    position: absolute; inset: 0; display: flex; flex-direction: column; gap: 8px;
+    align-items: center; justify-content: center; text-align: center; cursor: pointer;
+    border: 2px dashed #3a3f4a; border-radius: 10px; color: #9aa0aa; background: transparent;
+  }
+  .drop.drag { border-color: #3b82f6; background: #1a2230; }
+  .drop .hint { font-size: 15px; }
+  .drop .sub { font-size: 12px; }
+  .bar {
+    position: absolute; left: 0; right: 0; bottom: 0; padding: 10px 14px;
+    display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+    background: linear-gradient(transparent, rgba(0,0,0,.78));
+  }
+  .bar .name { font-size: 13px; color: #e6e6e6; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 35%; }
+  .bar .spacer { flex: 1; }
+  #time { font-size: 12px; color: #9aa0aa; white-space: nowrap; }
+  .seg { display: flex; border: 1px solid #3a3f4a; border-radius: 7px; overflow: hidden; }
+  .seg .btn { border-radius: 0; border: 0; }
+  .seg .btn.on { background: #3b82f6; color: #fff; }
+  .busy {
+    position: absolute; inset: 0; display: flex; flex-direction: column; gap: 12px;
+    align-items: center; justify-content: center; background: rgba(15,17,20,.6); color: #9aa0aa;
+  }
+  .spinner { width: 34px; height: 34px; border: 3px solid #333842; border-top-color: #3b82f6; border-radius: 50%; animation: spin 1s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<header>
+  <button id="sideToggle" title="参数">☰</button>
+  <span>RMBG 去背景</span>
+</header>
+<main>
+  <div class="viewer" id="viewer">
+    <div class="drop" id="drop">
+      <div class="hint">拖拽图片到这里，或点击选择</div>
+      <div class="sub">PNG / JPG / WebP · 输出透明 PNG</div>
+      <input type="file" id="file" accept="image/*" style="display:none">
+    </div>
+    <img id="view" alt="" style="display:none">
+    <div class="bar" id="bar" style="display:none">
+      <span class="name" id="fname"></span>
+      <span id="time"></span>
+      <span class="spacer"></span>
+      <span class="seg">
+        <button class="btn small on" id="btnOrig">原图</button>
+        <button class="btn small" id="btnRes" disabled>结果</button>
+      </span>
+      <button class="btn small" id="download" disabled>下载 PNG</button>
+      <button class="btn small ghost" id="change">更换</button>
+    </div>
+    <div class="busy" id="busy" style="display:none">
+      <div class="spinner"></div>
+      <div>处理中… CPU 推理较慢，请耐心等待</div>
+    </div>
+  </div>
+</main>
+<div class="backdrop" id="backdrop"></div>
+<aside class="panel" id="panel">
+  <div class="sheet-head">
+    <span>参数</span>
+    <button class="btn small ghost" id="sideClose">✕</button>
+  </div>
+  <label>模型</label>
+  <select id="model"></select>
+
+  <label>处理分辨率 <span class="val" id="res_val"></span></label>
+  <input type="range" id="res" min="256" max="2048" step="64" value="1024">
+
+  <label>灵敏度 <span class="val" id="sens_val"></span></label>
+  <input type="range" id="sens" min="0" max="1" step="0.01" value="1">
+
+  <label>边缘羽化 <span class="val" id="blur_val"></span></label>
+  <input type="range" id="blur" min="0" max="16" step="1" value="0">
+
+  <label>边缘收缩/扩张 <span class="val" id="off_val"></span></label>
+  <input type="range" id="off" min="-20" max="20" step="1" value="0">
+
+  <label class="row"><input type="checkbox" id="refine"> 前景边缘优化（较慢）</label>
+
+  <button class="btn run" id="run" disabled>开始去背景</button>
+  <div id="status"></div>
+</aside>
+<script>
+const $ = id => document.getElementById(id);
+const isDesktop = () => window.matchMedia("(min-width: 901px)").matches;
+let model = "";
+let fileObj = null;
+let origUrl = null, resUrl = null, fileName = "";
+let showRes = false;
+
+function setOpen(open) { document.body.classList.toggle("open", open); }
+$("sideToggle").onclick = () => setOpen(!document.body.classList.contains("open"));
+$("sideClose").onclick = () => setOpen(false);
+$("backdrop").onclick = () => setOpen(false);
+setOpen(isDesktop());
+window.matchMedia("(min-width: 901px)").addEventListener("change", e => setOpen(e.matches));
+
+let swipeX = null, swipeY = null;
+window.addEventListener("touchstart", e => {
+  const t = e.changedTouches[0];
+  swipeX = t.clientX; swipeY = t.clientY;
+}, { passive: true });
+window.addEventListener("touchmove", e => {
+  if (swipeX === null || document.body.classList.contains("open")) return;
+  const t = e.changedTouches[0];
+  const dx = t.clientX - swipeX;
+  const dy = t.clientY - swipeY;
+  if (swipeX < 32 && dx > 60 && Math.abs(dy) < Math.abs(dx)) {
+    setOpen(true);
+    swipeX = null;
+  }
+}, { passive: true });
+window.addEventListener("touchend", () => { swipeX = swipeY = null; });
+
+function fmt(id, val, suffix) {
+  $(id + "_val").textContent = (suffix === "s" ? val : val.toFixed(2));
+}
+$("res").oninput = e => fmt("res", +e.target.value, "s");
+$("sens").oninput = e => fmt("sens", +e.target.value);
+$("blur").oninput = e => fmt("blur", +e.target.value, "s");
+$("off").oninput = e => fmt("off", +e.target.value, "s");
+fmt("res", 1024, "s"); fmt("sens", 1); fmt("blur", 0, "s"); fmt("off", 0, "s");
+
+async function init() {
+  const r = await fetch("/api/models");
+  const data = await r.json();
+  const sel = $("model");
+  for (const m of data.models) {
+    const opt = document.createElement("option");
+    opt.value = m; opt.textContent = m;
+    sel.appendChild(opt);
+  }
+  const def = data.default || data.models[0];
+  sel.value = def;
+  model = def;
+  sel.onchange = () => { model = sel.value; };
+}
+init();
+
+function setImage(url, isResult) {
+  const img = $("view");
+  img.src = url;
+  img.style.display = "block";
+  showRes = isResult;
+  $("drop").style.display = "none";
+  $("bar").style.display = "flex";
+  $("btnOrig").classList.toggle("on", !showRes);
+  $("btnRes").classList.toggle("on", showRes);
+  $("btnRes").disabled = !resUrl;
+  $("download").disabled = !resUrl;
+  $("run").disabled = false;
+}
+
+function revoke(url) { if (url) URL.revokeObjectURL(url); }
+
+function pickFile(f) {
+  if (!f) return;
+  fileObj = f;
+  revoke(origUrl); revoke(resUrl);
+  origUrl = resUrl = null;
+  fileName = f.name;
+  origUrl = URL.createObjectURL(f);
+  $("fname").textContent = fileName;
+  $("time").textContent = "";
+  $("status").textContent = "";
+  setImage(origUrl, false);
+}
+
+$("drop").onclick = () => $("file").click();
+$("drop").ondragover = e => { e.preventDefault(); $("drop").classList.add("drag"); };
+$("drop").ondragleave = () => $("drop").classList.remove("drag");
+$("drop").ondrop = e => { e.preventDefault(); $("drop").classList.remove("drag"); pickFile(e.dataTransfer.files[0]); };
+$("file").onchange = e => pickFile(e.target.files[0]);
+$("change").onclick = () => $("file").click();
+
+$("btnOrig").onclick = () => { if (origUrl) setImage(origUrl, false); };
+$("btnRes").onclick = () => { if (resUrl) setImage(resUrl, true); };
+
+$("download").onclick = () => {
+  const a = document.createElement("a");
+  a.href = resUrl;
+  a.download = fileName.replace(/\.[^.]+$/, "") + ".png";
+  a.click();
+};
+
+$("run").onclick = async () => {
+  if (!origUrl) return;
+  if (!isDesktop()) setOpen(false);
+  const form = new FormData();
+  form.append("files", fileObj);
+  form.append("model", model);
+  form.append("process_res", $("res").value);
+  form.append("sensitivity", $("sens").value);
+  form.append("mask_blur", $("blur").value);
+  form.append("mask_offset", $("off").value);
+  form.append("refine", $("refine").checked);
+  $("run").disabled = true;
+  $("busy").style.display = "flex";
+  $("status").textContent = "";
+  try {
+    const r = await fetch("/api/rmbg", { method: "POST", body: form });
+    if (!r.ok) throw new Error(await r.text());
+    const elapsed = r.headers.get("X-Elapsed-Seconds");
+    revoke(resUrl);
+    resUrl = URL.createObjectURL(await r.blob());
+    setImage(resUrl, true);
+    $("time").textContent = elapsed ? `用时 ${elapsed}s` : "";
+    $("status").textContent = elapsed ? `完成，用时 ${elapsed} 秒` : "完成";
+  } catch (err) {
+    $("status").textContent = "出错: " + err.message;
+    $("run").disabled = false;
+  } finally {
+    $("busy").style.display = "none";
+  }
+};
+</script>
+</body>
+</html>
