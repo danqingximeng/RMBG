@@ -286,8 +286,7 @@ class BiRefNetModel:
                 hf_hub_download(
                     repo_id=MODEL_CONFIG[model_name]["repo_id"],
                     filename=filename,
-                    local_dir=cache_dir,
-                    local_dir_use_symlinks=False
+                    local_dir=cache_dir
                 )
                     
             return True, "Model files downloaded successfully"
@@ -342,7 +341,8 @@ class BiRefNetModel:
                 self.model.load_state_dict(state_dict)
                 
                 self.model.eval()
-                self.model.half()
+                if device == "cuda":
+                    self.model.half()
                 torch.set_float32_matmul_precision('high')
                 self.model.to(device)
                 self.current_model_version = model_name
@@ -362,7 +362,9 @@ class BiRefNetModel:
             orig_image = tensor2pil(image)
             w, h = orig_image.size
             
-            input_tensor = transform_image(orig_image).unsqueeze(0).to(device).half()
+            input_tensor = transform_image(orig_image).unsqueeze(0).to(device)
+            if device == "cuda":
+                input_tensor = input_tensor.half()
             
             with torch.no_grad():
                 preds = self.model(input_tensor)

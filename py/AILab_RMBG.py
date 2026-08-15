@@ -309,8 +309,11 @@ class InspyrenetModel(BaseModelLoader):
             self.clear_model()
             
             try:
+                import contextlib
+                import io
                 import transparent_background
-                self.model = transparent_background.Remover()
+                with contextlib.redirect_stdout(io.StringIO()):
+                    self.model = transparent_background.Remover()
                 self.current_model_version = model_name
             except Exception as e:
                 handle_model_error(f"Failed to initialize transparent_background: {str(e)}")
