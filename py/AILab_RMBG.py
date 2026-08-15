@@ -138,7 +138,8 @@ class BaseModelLoader:
     
     def clear_model(self):
         if self.model is not None:
-            self.model.cpu()
+            if hasattr(self.model, "cpu"):
+                self.model.cpu()
             del self.model
 
             import gc

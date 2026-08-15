@@ -69,6 +69,7 @@ alias rmbg='/path/to/本仓库/rmbg'   # 可选：加进 shell 配置
 - **INSPYRENET 的 process_res 无效**：transparent-background 库内部固定 1024 输入。
 - 推理需要 `einops`（BiRefNet 模型文件 import），不在原 requirements.txt 里。
 - 噪音清理：`AILab_RMBG.py` 的 `Remover()` 构造包了 `redirect_stdout`（消掉 "Settings ->" 打印）；`AILab_BiRefNet.py` 的下载已删废弃参数 `local_dir_use_symlinks`。
+- **AILab_RMBG.py `clear_model()` 的 `.cpu()` 已加 `hasattr` 防护**（第 3 处补丁）：INSPYRENET 的 `self.model` 是 `transparent_background.Remover()`（无 `.cpu()` 方法），此前闲置卸载 / ComfyUI 里切换模型会 `AttributeError` 崩掉 `_idle_thread` 导致监控线程死亡。此坑上游也有，日后可给上游提 PR。改这个文件时别撤掉 `hasattr` 防护。
 
 ## 实测参考（i5-8250U 8 线程，1024px，1600x708 图）
 
@@ -89,4 +90,6 @@ alias rmbg='/path/to/本仓库/rmbg'   # 可选：加进 shell 配置
 - serve 各分支：已 manual → "nothing to start" 退出 0；非 RMBG 服务占端口 → 报错退出 1；空闲 → 正常启动。
 - **pgrep/pkill 坑**：`pkill -f "standalone.rmbg_web"` 会匹配执行命令的 shell 自身导致挂起超时；`pgrep -f` 也会匹配 shell 包装进程（误报另一 pid）。务必用不自匹配的括号模式 `pgrep -f "[s]tandalone.rmbg_web"`。测试验证后台常驻进程时，**优先用启动时记下的真实 pid**（wrapper 下 `$!` 是 shell 包装 pid，`exec python` 后真实 python pid 不同，日志 "Started server process [PID]" 才是真实 pid）。
 - **serve 与预载竞态**：`serve` 探测端口时若另一进程正处预载（未 bind），会被当空闲并抢占端口，先占者后 bind 失败退出。真实场景（CLI 拉起时 spawn_daemon 已等 daemon_alive；serve 在前则进程已就绪）不会触发，未做特殊处理。
+- **stdout 重定向块缓冲**：`> log 2>&1` 拉起的守护，python stdout 是块缓冲（~8KB），`[idle]` 等 print 不会立刻落盘（用 `model_loaded`/RSS 验证行为更可靠）。要看实时日志加 `PYTHONUNBUFFERED=1`。
+- **`_idle_thread` 已加 try/except**：`unload_all()` 异常只打印不退出循环（避免一次异常让监控线程永久死亡）。
 - CLI 转发实测：CLI 24.1s（含拉起 ~5s），复用 23.1s，本地回退 28.6s（输出分别标记 daemon/daemon/local）。

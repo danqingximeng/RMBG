@@ -179,7 +179,10 @@ def _idle_thread():
                 os._exit(0)
         elif _state["idle_unload_min"] > 0 and idle > _state["idle_unload_min"] * 60:
             print(f"[idle {idle:.0f}s] unloading model weights")
-            rmbg_core.unload_all()
+            try:
+                rmbg_core.unload_all()
+            except Exception as e:
+                print(f"[idle] unload failed: {e}")
             _state["t"] = time.monotonic()
 
 
