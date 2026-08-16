@@ -6,8 +6,20 @@ Intended for standalone CLI and WebUI use, no ComfyUI required.
 Node instances are process-level singletons so a running daemon keeps model
 weights loaded across requests. warmup()/unload()/unload_all() let the daemon
 manage the weights' lifetime (idle unload).
+
+Memory policy:
+- Single-model residency: loading any model first drops the weights of every
+  other loader (each node family owns independent per-model loaders that never
+  unload each other, so switching across them would otherwise accumulate one
+  resident model per loader).
+- unload()/unload_all() call glibc malloc_trim(0): freed model weights are
+  hundreds of sub-mmap-threshold tensors that glibc keeps in its arenas, so
+  RSS would barely drop after unload without it.
 """
 
+import contextlib
+import ctypes
+import gc
 import importlib.util
 import os
 import sys
@@ -101,6 +113,32 @@ def _loader_for(model):
     return _get_birefnet_node().model, orig
 
 
+def _all_loaders():
+    """Every model loader across both node families (empty until nodes exist)."""
+    if _rmbg_node is not None:
+        yield from _rmbg_node.models.values()
+    if _birefnet_node is not None:
+        yield _birefnet_node.model
+
+
+def _malloc_trim():
+    """Return freed heap pages to the OS; no-op where glibc is unavailable."""
+    with contextlib.suppress(OSError, AttributeError):
+        ctypes.CDLL("libc.so.6").malloc_trim(0)
+
+
+def _unload_others(target_loader):
+    """Drop other loaders' weights so only the target loader stays resident."""
+    cleared = False
+    for loader in _all_loaders():
+        if loader is not target_loader and loader.model is not None:
+            loader.clear_model()
+            cleared = True
+    if cleared:
+        gc.collect()
+        _malloc_trim()
+
+
 def available_models():
     return aliases()
 
@@ -109,10 +147,11 @@ def warmup(model):
     """Load model weights without inference (downloads on first use)."""
     loader, orig = _loader_for(model)
     with _lock:
-        ok, msg = loader.check_model_cache(orig)
+        ok, _ = loader.check_model_cache(orig)
         if not ok:
             print(f"Downloading {orig} model files...")
             loader.download_model(orig)
+        _unload_others(loader)
         loader.load_model(orig)
 
 
@@ -121,27 +160,21 @@ def unload(model):
     loader, _ = _loader_for(model)
     with _lock:
         loader.clear_model()
+        _malloc_trim()
 
 
 def unload_all():
     """Release all loaded weights across both families (idempotent)."""
     with _lock:
-        if _rmbg_node is not None:
-            for loader in _rmbg_node.models.values():
-                loader.clear_model()
-        if _birefnet_node is not None:
-            _birefnet_node.model.clear_model()
+        for loader in _all_loaders():
+            loader.clear_model()
+        gc.collect()
+        _malloc_trim()
 
 
 def any_model_loaded():
     """True if any model weights are currently resident (for /health)."""
-    if _rmbg_node is not None:
-        for loader in _rmbg_node.models.values():
-            if loader.model is not None:
-                return True
-    if _birefnet_node is not None and _birefnet_node.model.model is not None:
-        return True
-    return False
+    return any(loader.model is not None for loader in _all_loaders())
 
 
 def _pil2tensor(image):
@@ -188,8 +221,10 @@ def remove_bg(
         "background_color": "#222222",
     }
     tensor = _pil2tensor(image.convert("RGB"))
+    loader, _ = _loader_for(model)
     with _lock:
         torch.set_num_threads(os.cpu_count())
+        _unload_others(loader)
         t0 = time.time()
         if orig in _RMBG_ORIG:
             out, _, _ = _get_rmbg_node().process_image(tensor, orig, **params)

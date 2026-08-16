@@ -1,0 +1,12 @@
+# standalone 运行依赖（只列直依赖，不含上游 requirements.txt 的内容）。
+# torch/torchvision 必须成对安装/升级（torchvision 的 C++ 算子按 torch 版本编译，
+# 不配对会报 "operator torchvision::nms does not exist"）。+cpu 轮子只在 PyTorch
+# 官方 CPU 源有，镜像源没有，因此文件内声明了 extra index。
+# 安装：uv pip install --python .venv/bin/python -r standalone/requirements.txt
+# 与上游 requirements.txt 的安装顺序不限；本文件会把 torch 钉回 CPU 版。
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.13.0+cpu
+torchvision==0.28.0+cpu
+fastapi>=0.115
+uvicorn>=0.30
+python-multipart>=0.0.9

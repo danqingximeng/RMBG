@@ -5,11 +5,11 @@
 ## 常用命令
 
 ```bash
-# 1. 建环境（CPU 版 torch 必须走专用索引）
+# 1. 建环境（standalone/requirements.txt 已含 CPU 版 torch，文件内声明了
+#    PyTorch CPU 源；torch/torchvision 必须成对，镜像里没有 +cpu 构建）
 uv venv .venv
-uv pip install --python .venv/bin/python torch torchvision --index-url https://download.pytorch.org/whl/cpu
-uv pip install --python .venv/bin/python -r standalone/requirements-standalone.txt
-uv pip install --python .venv/bin/python pytest    # 跑测试用，不在 requirements 里
+uv pip install --python .venv/bin/python -r standalone/requirements.txt
+uv pip install --python .venv/bin/python pytest httpx   # 跑测试用（TestClient 需 httpx）
 
 # 2. 测试（37 项全过；remove_bg 全程 monkeypatch，不加载 torch）
 .venv/bin/python -m pytest standalone/tests -q
@@ -76,13 +76,13 @@ preload: true # serve 启动时预载
 - `folder_paths.py` — ComfyUI `folder_paths` 垫片：`models_dir`（指向仓库根 `models/`）+ 空操作 `add_model_folder_path`。修改节点用到新的 `folder_paths` 属性时需同步补垫片。
 - `model_names.py` — 模型别名表，零依赖，`list`/`--help` 快速输出用。
 - `rmbg_config.py` — `Config.load()` / `ConfigError` / `to_dict()`，依赖仅 pyyaml + model_names（轻量，CLI 顶层可安全 import）。
-- `rmbg_core.py` — 核心。按文件路径加载 `py/AILab_RMBG.py`、`py/AILab_BiRefNet.py`（**不能 import 仓库根 `__init__.py`**——它会扫描加载全部节点含 SAM2/SAM3 等未装依赖）。对外 API：`remove_bg(pil_image, model, **params) -> (rgba_pil, elapsed_seconds)`、`available_models()`、`warmup(alias)`、`unload_all()`。内部 `_lock` 串行化推理；模型实例是**进程级单例**（勿每请求新建，否则每请求重载权重）；节点模块按模型家族懒加载（inspyrenet/rmbg2/ben/ben2 → 只加载 AILab_RMBG，biref-* → 只加载 AILab_BiRefNet）；模块顶部有 warnings 过滤（flet/torch.meshgrid/timm）。
+- `rmbg_core.py` — 核心。按文件路径加载 `py/AILab_RMBG.py`、`py/AILab_BiRefNet.py`（**不能 import 仓库根 `__init__.py`**——它会扫描加载全部节点含 SAM2/SAM3 等未装依赖）。对外 API：`remove_bg(pil_image, model, **params) -> (rgba_pil, elapsed_seconds)`、`available_models()`、`warmup(alias)`、`unload_all()`。内部 `_lock` 串行化推理；模型实例是**进程级单例**（勿每请求新建，否则每请求重载权重）；**单模型驻留**——加载任一模型前先卸其他 loader 的权重（节点内部 RMBG 4 个 + BiRefNet 1 个 loader 互不知晓，不这样做跨 loader 切模型会累积驻留），`unload*` 后调 glibc `malloc_trim` 把已释放但扣留在 arena 的权重页归还 OS；节点模块按模型家族懒加载（inspyrenet/rmbg2/ben/ben2 → 只加载 AILab_RMBG，biref-* → 只加载 AILab_BiRefNet）；模块顶部有 warnings 过滤（flet/torch.meshgrid/timm）。
 - `rmbg_cli.py` — 子命令化 CLI（镜像 upscayl 的 cli.py 结构）：`run`（默认，首参不是子命令时自动插入）/ `serve`（解析后调 `rmbg_web.serve()`，自身不实现 daemon）/ `list` / `completion`；顶层 `-l`/`--list-models` 兼容别名在 main() 里改写成 list。run 三条路径：`daemon_alive(port)`（校验 `/health` 返回 `service=="rmbg-daemon"`）→ `spawn_daemon`（60s 内轮询存活；`-c` 会转发给守护）→ `process_via_daemon`（**JSON 转发**：`POST /api/rmbg` + `{"image": "data:image/png;base64,..."}`，不手拼 multipart；解析 `data[0].b64_json` 解码落盘）→ 全失败 `process_local`。`-m` 缺省 = config `model` 或 `DEFAULT_MODEL`；`--port` 缺省 = config `port`。`rmbg_web`/`rmbg_core` 懒导入，`list`/`--help` 不加载 torch、秒出。
 - `rmbg_web.py` — FastAPI 守护/WebUI，见 HTTP API 一节。启动逻辑 `serve(host, port, preload_model, no_preload, managed, idle_kill_min, idle_unload_min, config_path)`：**None 的参数按 CLI > config > 内建默认解析**（`main()` 的 argparse 壳和 `rmbg_cli serve` 都调它；spawn 依赖的 `python -m standalone.rmbg_web --managed` 仍可直接跑）。
 - `web/` — 单图 WebUI，见 WebUI 一节。
 - `completion/`（仓库根，非本目录）— `_rmbg`（zsh）+ `rmbg.bash`。**只补模型名**：`-m/--model/--preload-model` 后出 `rmbg list` 别名，其余一律兜底原生文件补全（zsh 显式 `_files`，bash `complete -o default`）——不补子命令/选项。zsh 补全经 `~/.oh-my-zsh/custom/completions/_rmbg` 符号链接安装（改仓库文件即同步；装后需新开终端）。**坑**：注册 compdef 后若无显式兜底，原生文件补全会被接管且不自动回退。
 - `tests/` — pytest，跑法见常用命令。**conftest.py 里的 sys.modules 假包补丁别删**：仓库根 ComfyUI `__init__.py` 的 `load_nodes()` 会 rglob 执行全仓库 .py（含 `.venv`），假包顶掉 pytest 的 Package 收集，否则可能直接 SystemExit。
-- `requirements-standalone.txt` — 裁剪后的依赖（不含 SAM/SDMatte/GroundingDINO 等重型包）。
+- `requirements.txt` — 精简直依赖：CPU 版 torch/torchvision（钉死成对版本，文件内声明 PyTorch CPU extra index）+ fastapi/uvicorn/python-multipart。装完可再装上游 `requirements.txt`，顺序不限——本文件会把 torch 钉回 CPU 版。
 
 ## HTTP API（rmbg_web.py）
 
@@ -121,10 +121,10 @@ POST /api/rmbg      -> 去背景，见下
 
 ## 关键约束与坑
 
-- **代理**：首次跑会从 HF 下载模型，需 `export http_proxy=http://localhost:2082 https_proxy=http://localhost:2082`。模型落地 `models/RMBG/`，INSPYRENET 在 transparent-background 库自身缓存。
+- **代理**：首次跑会从 HF 下载模型，需 `export http_proxy=http://localhost:2082 https_proxy=http://localhost:2082`。模型统一落地 `models/RMBG/`（含 INSPYRENET 的 `inspyrenet.pth`；transparent-background 的 config.yaml 也经 `TRANSPARENT_BACKGROUND_FILE_PATH` 重定向到 `models/RMBG/.transparent-background/`，不写 `~/.`）。
 - **CPU 补丁别撤**：`py/AILab_BiRefNet.py` 两处 `.half()`（模型和输入）已条件化为仅 CUDA 生效（fp16 在此 CPU 更慢，且模型 fp32 + 输入 fp16 直接类型报错）。
 - **hasattr 防护别撤**：`py/AILab_RMBG.py` `clear_model()` 的 `.cpu()` 有 `hasattr` 防护——INSPYRENET 的 `self.model` 是 `transparent_background.Remover()`（无 `.cpu()`），撤掉会让闲置卸载 `AttributeError` 崩掉 `_idle_thread`。上游也有此坑，日后可提 PR。
-- **启动期低 CPU 是正常的**：启动到推理前约 15s 为导入 + 模型加载（含 367MB ckpt 的全文件 md5 校验和反序列化），单线程 30-40% 占用；之后才是 100% 推理。批量/常驻进程只付一次启动成本。md5 校验通过不重复下载。
+- **启动期低 CPU 是正常的**：启动到推理前约 15s 为导入 + 模型加载（351MB ckpt 反序列化；`Remover(ckpt=...)` 显式传权重路径，跳过库自身的 md5 校验/下载逻辑），单线程 30-40% 占用；之后才是 100% 推理。批量/常驻进程只付一次启动成本。
 - **调节点 `process_image` 必须给全参数**：`invert_output`、`background`、`background_color`（节点内部 `params["..."]` 直取，不兜底，缺了 KeyError）。
 - **INSPYRENET 的 process_res 无效**：transparent-background 库内部固定 1024 输入。
 - 推理需要 `einops`（BiRefNet 模型文件 import），不在原 requirements.txt 里。
@@ -141,4 +141,4 @@ POST /api/rmbg      -> 去背景，见下
 | `rmbg2`                     | ~52-58s  |
 | `birefnet`                  | ~72s     |
 
-CLI 三路径：daemon 复用 ~23s、含拉起 ~24s、本地回退 ~29s。预载模型后 RSS ≈ 766MB，`unload_all()` 后 ≈ 490-500MB（小模型因 glibc 不归还内存降幅可能小，但权重已释放可复用）。ben/ben2 及其余 BiRefNet 变体未实测，走同一代码路径。
+CLI 三路径：daemon 复用 ~23s、含拉起 ~24s、本地回退 ~29s。内存：CPU 版 torch 导入基线 ≈ 294MB（CUDA 版构建 ≈ 500MB，且带 2.7GB nvidia 库）；`unload_all()` 含 `malloc_trim`，权重页基本即时归还 OS（实测大模型卸载直降 0.85-1.8GB）；切模型单模型驻留不累积。ben2 已实测加载（权重 ≈ 363MB），推理未实测，与 ben 走同一代码路径。

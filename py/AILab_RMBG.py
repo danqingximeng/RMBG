@@ -52,7 +52,9 @@ AVAILABLE_MODELS = {
         "type": "inspyrenet",
         "repo_id": "1038lab/inspyrenet",
         "files": {
-            "inspyrenet.safetensors": "inspyrenet.safetensors"
+            # Remover(ckpt=...) torch.loads this file; the safetensors variant
+            # it replaces was downloaded but never read by the loader.
+            "inspyrenet.pth": "inspyrenet.pth"
         },
         "cache_dir": "INSPYRENET"
     },
@@ -313,8 +315,14 @@ class InspyrenetModel(BaseModelLoader):
                 import contextlib
                 import io
                 import transparent_background
+                # Remover keeps a small config.yaml next to its checkpoint dir;
+                # redirect it from ~/.transparent-background into the models
+                # dir (env var is read at Remover init; don't override a
+                # user-provided value).
+                os.environ.setdefault("TRANSPARENT_BACKGROUND_FILE_PATH", self.base_cache_dir)
+                ckpt_path = os.path.join(self.get_cache_dir(model_name), "inspyrenet.pth")
                 with contextlib.redirect_stdout(io.StringIO()):
-                    self.model = transparent_background.Remover()
+                    self.model = transparent_background.Remover(ckpt=ckpt_path)
                 self.current_model_version = model_name
             except Exception as e:
                 handle_model_error(f"Failed to initialize transparent_background: {str(e)}")
