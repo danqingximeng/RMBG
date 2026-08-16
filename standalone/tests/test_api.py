@@ -173,3 +173,42 @@ def test_error_undecodable_image(client):
     r = c.post("/api/rmbg", files={"file": ("a.png", b"not-an-image", "image/png")})
     assert r.status_code == 400
     assert "decode" in r.json()["error"]["message"]
+
+
+def test_api_config_fallback(client, monkeypatch, tmp_path):
+    """未经过 serve()（TestClient 直接挂 app）时回落 Config.load()。"""
+    import standalone.rmbg_config as rmbg_config
+
+    c, _ = client
+    missing = tmp_path / "none.yaml"
+    monkeypatch.setattr(rmbg_config, "DEFAULT_CONFIG_FILE", missing)
+    body = c.get("/api/config").json()
+    assert body["model"] is None
+    assert body["host"] == "127.0.0.1"
+    assert body["port"] == 8123
+    assert body["preload"] is True
+    assert body["config_path"] == str(missing)
+
+
+def test_api_config_served_state(client, monkeypatch):
+    c, _ = client
+    served = {"model": "biref-lite", "port": 9000}
+    monkeypatch.setitem(web._state, "config", served)
+    assert c.get("/api/config").json() == served
+
+
+def test_models_default_from_served_state(client, monkeypatch):
+    c, _ = client
+    monkeypatch.setitem(web._state, "model_default", "biref-lite")
+    body = c.get("/api/models").json()
+    assert body["default"] == "biref-lite"
+    assert [m["id"] for m in body["data"] if m["default"]] == ["biref-lite"]
+
+
+def test_rmbg_uses_served_default_model(client, monkeypatch):
+    c, fake = client
+    monkeypatch.setitem(web._state, "model_default", "biref-lite")
+    payload = base64.b64encode(png_bytes()).decode()
+    r = c.post("/api/rmbg", json={"image": f"data:image/png;base64,{payload}"})
+    assert r.status_code == 200
+    assert fake.calls[0]["model"] == "biref-lite"

@@ -1,21 +1,24 @@
 """RMBG daemon / WebUI. Usage:
 
-    python -m standalone.rmbg_web [--port 8123] [--preload-model MODEL]
-                                  [--no-preload] [--managed] [--idle-kill-min 5]
-                                  [--idle-unload-min 5]
+    rmbg serve [--host] [--port] [--preload-model MODEL] [--no-preload]
+               [--idle-kill-min 5] [--idle-unload-min 5] [-c CONFIG]
+    python -m standalone.rmbg_web [--managed] ...   # CLI 内部 spawn 用
 
-- Manual serve (default): preloads the default model (`--preload-model`,
-  default inspyrenet) at startup, keeps running, and unloads model weights
-  after `--idle-unload-min` minutes without a request. If a daemon already
-  runs on the port, serve does NOT start a second one: a CLI-spawned
-  (managed) daemon is promoted to manual (POST /api/managed) so it stops
-  self-killing and only unloads weights when idle.
+- Manual serve (default): preloads the default model at startup, keeps
+  running, and unloads model weights after `--idle-unload-min` minutes
+  without a request. If a daemon already runs on the port, serve does NOT
+  start a second one: a CLI-spawned (managed) daemon is promoted to manual
+  (POST /api/managed) so it stops self-killing and only unloads weights
+  when idle.
 - `--no-preload` disables the startup preload (default is to preload).
 - Managed (CLI-spawned, --managed): exits entirely after `--idle-kill-min`
   minutes without a request.
+- 未指定的参数回落 ~/.config/rmbg/config.yaml（优先级 CLI > config > 内建，
+  见 rmbg_config.py）。
 
 HTTP API (programmable; OpenAI-style envelope shared with upscayl-py):
     GET  /health        {"status":"ok", "service": "rmbg-daemon", managed, busy, ...}
+    GET  /api/config    生效配置（serve 时含 CLI 合并结果；否则为文件+默认）
     GET  /api/models    {"data":[{"id":...,"default":bool}], "default":...}
     POST /api/managed   {"managed": bool} -> promote to manual (false) at runtime
     POST /api/rmbg      multipart (`file`, 1..n) or JSON ({"image": data-URI|path|URL})
@@ -45,6 +48,7 @@ from starlette.concurrency import run_in_threadpool
 
 from standalone import rmbg_core
 from standalone.model_names import DEFAULT_MODEL, MODEL_ALIASES
+from standalone.rmbg_config import Config, ConfigError
 from standalone.rmbg_core import available_models, remove_bg
 
 app = FastAPI(title="RMBG Standalone")
@@ -58,6 +62,9 @@ _state = {
     "managed": False,
     "idle_kill_min": 5.0,
     "idle_unload_min": 5.0,
+    # serve() 时写入；未 serve（TestClient 直接挂 app）时用内建默认
+    "model_default": DEFAULT_MODEL,
+    "config": None,
 }
 
 
@@ -81,11 +88,22 @@ def health():
     }
 
 
+@app.get("/api/config")
+def api_config():
+    if _state["config"] is not None:
+        return _state["config"]
+    try:
+        return Config.load().to_dict()
+    except ConfigError as e:
+        return JSONResponse(*_err_payload(f"bad config: {e}", 500))
+
+
 @app.get("/api/models")
 def models():
+    default = _state["model_default"]
     return {
-        "data": [{"id": m, "default": m == DEFAULT_MODEL} for m in available_models()],
-        "default": DEFAULT_MODEL,
+        "data": [{"id": m, "default": m == default} for m in available_models()],
+        "default": default,
     }
 
 
@@ -170,7 +188,7 @@ def _fetch_url(url):
 def _process(images, opts):
     """同步推理（线程池里跑，别阻塞事件循环）。images: [(filename, bytes)]。"""
     try:
-        model = opts.get("model") or DEFAULT_MODEL
+        model = opts.get("model") or _state["model_default"]
         if model not in _valid_models():
             return _err_payload(
                 f"unknown model '{model}'. available: {', '.join(sorted(MODEL_ALIASES))}",
@@ -323,16 +341,100 @@ def _idle_thread():
             _state["t"] = time.monotonic()
 
 
-def main():
+def serve(
+    host=None,
+    port=None,
+    preload_model=None,
+    no_preload=False,
+    managed=False,
+    idle_kill_min=None,
+    idle_unload_min=None,
+    config_path=None,
+):
+    """Start the daemon. None 的参数按 CLI > config > 内建默认解析。
+
+    main() 和 rmbg_cli 的 serve 子命令都走这里。
+    """
     import uvicorn
 
+    try:
+        cfg = Config.load(Path(config_path).expanduser() if config_path else None)
+    except ConfigError as e:
+        print(f"error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    host = host if host is not None else cfg.host
+    port = port if port is not None else cfg.port
+    model_default = cfg.resolve_model()
+    preload_model = preload_model if preload_model is not None else model_default
+    preload = not no_preload and (cfg.preload or preload_model is not None)
+    idle_kill_min = idle_kill_min if idle_kill_min is not None else cfg.idle_kill_min
+    idle_unload_min = (
+        idle_unload_min if idle_unload_min is not None else cfg.idle_unload_min
+    )
+
+    if preload and preload_model not in _valid_models():
+        print(
+            f"error: unknown model '{preload_model}'. "
+            f"available: {', '.join(sorted(MODEL_ALIASES))}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    _state["managed"] = managed
+    _state["idle_kill_min"] = idle_kill_min
+    _state["idle_unload_min"] = idle_unload_min
+    _state["model_default"] = model_default
+    _state["config"] = Config(
+        model=cfg.model,
+        host=host,
+        port=port,
+        idle_unload_min=idle_unload_min,
+        idle_kill_min=idle_kill_min,
+        preload=preload,
+        config_path=cfg.config_path,
+    ).to_dict()
+
+    if not managed:
+        status, existing = _probe(port)
+        if status != "closed":
+            if status == "other":
+                print(
+                    f"Port {port} is used by a non-RMBG service; not starting.",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+            if existing["managed"]:
+                _set_managed(port, False)
+                print(
+                    f"Existing CLI-spawned daemon on {port} promoted to manual: "
+                    f"it will no longer self-kill, only unload weights when idle."
+                )
+            else:
+                print(f"Daemon already running on {port} (manual); nothing to start.")
+            return
+
+    if preload:
+        print(f"Preloading model: {preload_model}")
+        rmbg_core.warmup(preload_model)
+        _state["t"] = time.monotonic()
+
+    threading.Thread(target=_idle_thread, daemon=True).start()
+
+    print(
+        f"RMBG daemon: http://{host}:{port}  "
+        f"(managed={managed}, idle-kill={idle_kill_min}m, idle-unload={idle_unload_min}m)"
+    )
+    uvicorn.run(app, host=host, port=port)
+
+
+def main():
     parser = argparse.ArgumentParser(description="RMBG daemon / WebUI")
-    parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=8123)
+    parser.add_argument("--host", help="bind address (default from config)")
+    parser.add_argument("--port", type=int, help="port (default from config)")
     parser.add_argument(
         "--preload-model",
-        default="inspyrenet",
-        help="Model alias to preload at startup (default: inspyrenet)",
+        help="Model alias to preload at startup (default: config model or inspyrenet)",
     )
     parser.add_argument(
         "--no-preload",
@@ -347,54 +449,26 @@ def main():
     parser.add_argument(
         "--idle-kill-min",
         type=float,
-        default=5.0,
         help="Managed daemon: exit after N idle minutes (0=never)",
     )
     parser.add_argument(
         "--idle-unload-min",
         type=float,
-        default=5.0,
         help="Manual daemon: unload weights after N idle minutes (0=never)",
     )
+    parser.add_argument("-c", "--config", help="config file path")
     args = parser.parse_args()
 
-    _state["managed"] = args.managed
-    _state["idle_kill_min"] = args.idle_kill_min
-    _state["idle_unload_min"] = args.idle_unload_min
-
-    if not args.managed:
-        status, existing = _probe(args.port)
-        if status != "closed":
-            if status == "other":
-                print(
-                    f"Port {args.port} is used by a non-RMBG service; not starting.",
-                    file=sys.stderr,
-                )
-                sys.exit(1)
-            if existing["managed"]:
-                _set_managed(args.port, False)
-                print(
-                    f"Existing CLI-spawned daemon on {args.port} promoted to manual: "
-                    f"it will no longer self-kill, only unload weights when idle."
-                )
-            else:
-                print(
-                    f"Daemon already running on {args.port} (manual); nothing to start."
-                )
-            return
-
-    if not args.no_preload:
-        print(f"Preloading model: {args.preload_model}")
-        rmbg_core.warmup(args.preload_model)
-        _state["t"] = time.monotonic()
-
-    threading.Thread(target=_idle_thread, daemon=True).start()
-
-    print(
-        f"RMBG daemon: http://{args.host}:{args.port}  "
-        f"(managed={args.managed}, idle-kill={args.idle_kill_min}m, idle-unload={args.idle_unload_min}m)"
+    serve(
+        host=args.host,
+        port=args.port,
+        preload_model=args.preload_model,
+        no_preload=args.no_preload,
+        managed=args.managed,
+        idle_kill_min=args.idle_kill_min,
+        idle_unload_min=args.idle_unload_min,
+        config_path=args.config,
     )
-    uvicorn.run(app, host=args.host, port=args.port)
 
 
 if __name__ == "__main__":
