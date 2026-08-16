@@ -59,7 +59,9 @@ def _get_rmbg_module():
     global _rmbg_module
     if _rmbg_module is None:
         _ensure_shim()
-        _rmbg_module = _load_module("AILab_RMBG", os.path.join(NODE_DIR, "AILab_RMBG.py"))
+        _rmbg_module = _load_module(
+            "AILab_RMBG", os.path.join(NODE_DIR, "AILab_RMBG.py")
+        )
     return _rmbg_module
 
 
@@ -68,7 +70,9 @@ def _get_birefnet_module():
     global _birefnet_module
     if _birefnet_module is None:
         _ensure_shim()
-        _birefnet_module = _load_module("AILab_BiRefNet", os.path.join(NODE_DIR, "AILab_BiRefNet.py"))
+        _birefnet_module = _load_module(
+            "AILab_BiRefNet", os.path.join(NODE_DIR, "AILab_BiRefNet.py")
+        )
     return _birefnet_module
 
 
@@ -144,16 +148,27 @@ def any_model_loaded():
 def _pil2tensor(image):
     import numpy as np
     import torch
+
     return torch.from_numpy(np.array(image).astype(np.float32) / 255.0).unsqueeze(0)
 
 
 def _tensor2pil(tensor):
     import numpy as np
-    return Image.fromarray(np.clip(255.0 * tensor.cpu().numpy().squeeze(), 0, 255).astype(np.uint8))
+
+    return Image.fromarray(
+        np.clip(255.0 * tensor.cpu().numpy().squeeze(), 0, 255).astype(np.uint8)
+    )
 
 
-def remove_bg(image, model, process_res=1024, sensitivity=1.0, mask_blur=0,
-              mask_offset=0, refine_foreground=False):
+def remove_bg(
+    image,
+    model,
+    process_res=1024,
+    sensitivity=1.0,
+    mask_blur=0,
+    mask_offset=0,
+    refine_foreground=False,
+):
     """Remove background from a PIL image, return RGBA PIL image.
 
     Model aliases: rmbg2, inspyrenet, ben, ben2, birefnet, biref-lite, ...
