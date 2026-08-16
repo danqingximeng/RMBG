@@ -2,7 +2,7 @@
 
     rmbg [run] <image_or_dir> -o <out_dir> [options]
     rmbg serve [--host] [--port] [--preload-model] [--no-preload] ...
-    rmbg list [--names]
+    rmbg list
     rmbg completion zsh|bash
 
 `run` (default when the first arg is not a subcommand) processes a single
@@ -31,12 +31,11 @@ import os
 import subprocess
 import sys
 import time
+import urllib.error
 import urllib.request
-import uuid
 from pathlib import Path
 
 from PIL import Image
-
 from standalone.model_names import DEFAULT_MODEL, MODEL_ALIASES
 from standalone.rmbg_config import Config, ConfigError
 
@@ -100,82 +99,123 @@ def spawn_daemon(port, model, config_path=None):
     return False
 
 
-def multipart_body(boundary, args, file_bytes, filename):
-    parts = []
-    fields = [
-        ("model", args.model),
-        ("process_res", str(args.process_res)),
-        ("sensitivity", str(args.sensitivity)),
-        ("mask_blur", str(args.mask_blur)),
-        ("mask_offset", str(args.mask_offset)),
-        ("refine", "true" if args.refine else "false"),
-    ]
-    for k, v in fields:
-        parts.append(
-            f'--{boundary}\r\nContent-Disposition: form-data; name="{k}"\r\n\r\n{v}\r\n'.encode()
+def _daemon_error_message(e):
+    """HTTPError -> 服务端 {"error":{"message"}} 信封里的 message，解析失败回落 str(e)。"""
+    try:
+        body = json.loads(e.read())
+        return body.get("error", {}).get("message", str(e))
+    except Exception:  # noqa: BLE001  # 解析失败回落 str(e)，宽捕获否则畸形响应会崩
+        return str(e)
+
+
+def _print_summary(files, ok, failed, total):
+    """汇总行：全部成功走 stdout，有失败走 stderr（ok=0 时不能除 0）。"""
+    if failed:
+        if ok:
+            print(
+                f"Done. {ok}/{len(files)} image(s), {failed} failed, total {total:.1f}s, "
+                f"avg {total / ok:.1f}s/image",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                f"Done. {failed}/{len(files)} failed, nothing written",
+                file=sys.stderr,
+            )
+    else:
+        print(
+            f"Done. {len(files)} image(s), total {total:.1f}s, "
+            f"avg {total / len(files):.1f}s/image"
         )
-    parts.append(
-        f'--{boundary}\r\nContent-Disposition: form-data; name="file"; filename="{filename}"\r\n'
-        f"Content-Type: image/png\r\n\r\n".encode()
-    )
-    parts.append(file_bytes)
-    parts.append(f"\r\n--{boundary}--\r\n".encode())
-    return b"".join(parts)
 
 
 def process_via_daemon(files, args, port):
+    """逐张 POST /api/rmbg 的 JSON data-URI 输入，无需手拼 multipart。
+
+    单张失败（daemon 4xx/5xx、网络错误、响应缺字段）打印报错并跳过，
+    返回非 0 表示有失败。
+    """
     url = f"http://127.0.0.1:{port}/api/rmbg"
     total = 0.0
+    failed = 0
     for i, path in enumerate(files, 1):
-        buf = io.BytesIO()
-        Image.open(path).convert("RGB").save(buf, format="PNG")
-        boundary = uuid.uuid4().hex
-        body = multipart_body(boundary, args, buf.getvalue(), path.name)
-        req = urllib.request.Request(
-            url,
-            data=body,
-            headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
-        )
-        t0 = time.time()
-        with urllib.request.urlopen(req, timeout=3600) as r:
-            payload = json.loads(r.read())
+        try:
+            buf = io.BytesIO()
+            Image.open(path).convert("RGB").save(buf, format="PNG")
+            payload = {
+                "image": "data:image/png;base64,"
+                + base64.b64encode(buf.getvalue()).decode(),
+                "model": args.model,
+                "process_res": args.process_res,
+                "sensitivity": args.sensitivity,
+                "mask_blur": args.mask_blur,
+                "mask_offset": args.mask_offset,
+                "refine": args.refine,
+            }
+            req = urllib.request.Request(
+                url,
+                data=json.dumps(payload).encode(),
+                headers={"Content-Type": "application/json"},
+            )
+            t0 = time.time()
+            with urllib.request.urlopen(req, timeout=3600) as r:
+                result = json.loads(r.read())
+            out_bytes = base64.b64decode(result["data"][0]["b64_json"])
+            out_path = args.output / (path.stem + ".png")
+            out_path.write_bytes(out_bytes)
+        except urllib.error.HTTPError as e:
+            failed += 1
+            print(
+                f"[{i}/{len(files)}] {path.name}: daemon error {e.code}: "
+                f"{_daemon_error_message(e)}",
+                file=sys.stderr,
+            )
+            continue
+        except Exception as e:  # noqa: BLE001  # 网络错误/坏文件/响应缺字段都跳过继续
+            failed += 1
+            print(f"[{i}/{len(files)}] {path.name}: {e}", file=sys.stderr)
+            continue
         elapsed = time.time() - t0
-        out_bytes = base64.b64decode(payload["data"][0]["b64_json"])
         total += elapsed
-        out_path = args.output / (path.stem + ".png")
-        out_path.write_bytes(out_bytes)
         print(
             f"[{i}/{len(files)}] {path.name}: {elapsed:.1f}s -> {out_path.name} (daemon)"
         )
-    print(
-        f"Done. {len(files)} image(s), total {total:.1f}s, avg {total / len(files):.1f}s/image"
-    )
+    ok = len(files) - failed
+    _print_summary(files, ok, failed, total)
+    return 1 if failed else 0
 
 
 def process_local(files, args, remove_bg):
+    """单张失败（坏图/推理异常）打印报错并跳过，返回非 0 表示有失败。"""
     total = 0.0
+    failed = 0
     for i, path in enumerate(files, 1):
-        image = Image.open(path)
-        t0 = time.time()
-        result, _ = remove_bg(
-            image,
-            args.model,
-            process_res=args.process_res,
-            sensitivity=args.sensitivity,
-            mask_blur=args.mask_blur,
-            mask_offset=args.mask_offset,
-            refine_foreground=args.refine,
-        )
-        elapsed = time.time() - t0
-        total += elapsed
-        out_path = args.output / (path.stem + ".png")
-        result.save(out_path)
+        try:
+            image = Image.open(path)
+            t0 = time.time()
+            result, _ = remove_bg(
+                image,
+                args.model,
+                process_res=args.process_res,
+                sensitivity=args.sensitivity,
+                mask_blur=args.mask_blur,
+                mask_offset=args.mask_offset,
+                refine_foreground=args.refine,
+            )
+            elapsed = time.time() - t0
+            total += elapsed
+            out_path = args.output / (path.stem + ".png")
+            result.save(out_path)
+        except Exception as e:  # noqa: BLE001  # 坏图/推理/保存失败都跳过继续
+            failed += 1
+            print(f"[{i}/{len(files)}] {path.name}: {e}", file=sys.stderr)
+            continue
         print(
             f"[{i}/{len(files)}] {path.name}: {elapsed:.1f}s -> {out_path.name} (local)"
         )
-    print(
-        f"Done. {len(files)} image(s), total {total:.1f}s, avg {total / len(files):.1f}s/image"
-    )
+    ok = len(files) - failed
+    _print_summary(files, ok, failed, total)
+    return 1 if failed else 0
 
 
 def build_parser():
@@ -243,11 +283,6 @@ def build_parser():
     ps.add_argument("-c", "--config", help="config file path")
 
     pl = sub.add_parser("list", help="list available model aliases")
-    pl.add_argument(
-        "--names",
-        action="store_true",
-        help="print one alias per line (same as the default output)",
-    )
     pl.add_argument("-c", "--config", help="config file path")
 
     pc = sub.add_parser("completion", help="print shell completion script")
@@ -286,16 +321,15 @@ def cmd_run(args, cfg: Config) -> int:
     print(f"Model: {model} | processing {len(files)} image(s)")
 
     if daemon_alive(args.port):
-        process_via_daemon(files, args, args.port)
+        return process_via_daemon(files, args, args.port)
     elif spawn_daemon(args.port, model, config_path=cfg.config_path):
         print(f"Daemon spawned on port {args.port}")
-        process_via_daemon(files, args, args.port)
+        return process_via_daemon(files, args, args.port)
     else:
         print("No daemon available, processing locally")
         from standalone.rmbg_core import remove_bg
 
-        process_local(files, args, remove_bg)
-    return 0
+        return process_local(files, args, remove_bg)
 
 
 def cmd_serve(args) -> int:

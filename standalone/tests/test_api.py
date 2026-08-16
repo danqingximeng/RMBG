@@ -7,10 +7,9 @@ import base64
 import io
 
 import pytest
+import standalone.rmbg_web as web
 from fastapi.testclient import TestClient
 from PIL import Image
-
-import standalone.rmbg_web as web
 from standalone.model_names import DEFAULT_MODEL, MODEL_ALIASES
 
 
@@ -177,7 +176,7 @@ def test_error_undecodable_image(client):
 
 def test_api_config_fallback(client, monkeypatch, tmp_path):
     """未经过 serve()（TestClient 直接挂 app）时回落 Config.load()。"""
-    import standalone.rmbg_config as rmbg_config
+    from standalone import rmbg_config
 
     c, _ = client
     missing = tmp_path / "none.yaml"

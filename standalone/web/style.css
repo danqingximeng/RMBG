@@ -1,0 +1,376 @@
+* {
+  box-sizing: border-box;
+}
+
+:root {
+  --bg: #14161a;
+  --panel: #1d2026;
+  --border: #2a2d34;
+  --input: #262a32;
+  --input-border: #333842;
+  --fg: #e6e6e6;
+  --muted: #9aa0aa;
+  --accent: #3b82f6;
+  --viewer-bg: #0f1114;
+  --drop-border: #3a3f4a;
+  --drag-bg: #1a2230;
+}
+
+html,
+body {
+  height: 100%;
+}
+body {
+  font-family: system-ui, "PingFang SC", "Microsoft YaHei", sans-serif;
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  height: 100dvh;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* ---------- header ---------- */
+header {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  font-size: 16px;
+  font-weight: 600;
+  border-bottom: 1px solid var(--border);
+}
+header .logo {
+  width: 22px;
+  height: 22px;
+  border-radius: 5px;
+  flex: none;
+}
+#sideToggle {
+  background: var(--panel);
+  color: var(--fg);
+  border: 1px solid var(--input-border);
+  border-radius: 7px;
+  padding: 4px 10px;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  transition: border-color 0.12s;
+}
+#sideToggle:hover {
+  border-color: var(--accent);
+}
+
+/* 桌面端：panel 是 main 里的流内 flex 列，页头永远完整可见 */
+main {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+.panel {
+  position: fixed;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: min(85vw, 320px);
+  overflow-y: auto;
+  background: var(--panel);
+  border-right: 1px solid var(--border);
+  padding: 16px;
+  z-index: 60;
+  transform: translateX(-105%);
+  transition: transform 0.25s ease;
+}
+body.open .panel {
+  transform: translateX(0);
+}
+.backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.25s;
+  z-index: 55;
+}
+body.open .backdrop {
+  opacity: 1;
+  pointer-events: auto;
+}
+.viewwrap {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  padding: 20px;
+}
+@media (max-width: 900px) {
+  .viewwrap {
+    padding: 8px;
+  }
+}
+@media (min-width: 901px) {
+  .panel {
+    position: static;
+    width: 300px;
+    flex: none;
+    transform: none;
+    transition: none;
+    z-index: auto;
+  }
+  .backdrop,
+  #sideToggle,
+  #sideClose {
+    display: none;
+  }
+}
+
+/* ---------- 左栏表单 ---------- */
+.sheet-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+.sheet-head span {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--muted);
+}
+label {
+  display: block;
+  font-size: 13px;
+  color: var(--muted);
+  margin: 12px 0 4px;
+}
+select,
+input[type="range"] {
+  width: 100%;
+  accent-color: var(--accent);
+}
+select {
+  background: var(--input);
+  color: var(--fg);
+  border: 1px solid var(--input-border);
+  border-radius: 6px;
+  padding: 7px 9px;
+  font-size: 14px;
+}
+select:hover {
+  border-color: var(--drop-border);
+}
+
+.btn {
+  display: inline-block;
+  background: var(--accent);
+  color: #fff;
+  border: 0;
+  border-radius: 7px;
+  padding: 10px 14px;
+  font-size: 14px;
+  cursor: pointer;
+  transition: filter 0.12s;
+}
+.btn:hover:not(:disabled) {
+  filter: brightness(1.12);
+}
+.btn:active:not(:disabled) {
+  filter: brightness(0.95);
+}
+.btn:disabled {
+  background: var(--input-border);
+  cursor: not-allowed;
+}
+.btn.ghost {
+  background: transparent;
+  border: 1px solid var(--input-border);
+  color: var(--fg);
+}
+.btn.ghost:hover:not(:disabled) {
+  border-color: var(--accent);
+  filter: none;
+}
+.btn.small {
+  padding: 6px 10px;
+  font-size: 13px;
+}
+.run {
+  width: 100%;
+  margin-top: 16px;
+  padding: 12px;
+  font-size: 14px;
+}
+#status {
+  font-size: 13px;
+  color: var(--muted);
+  margin-top: 12px;
+  min-height: 18px;
+}
+.row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.row input[type="checkbox"] {
+  width: auto;
+}
+.val {
+  color: #c9cfd8;
+  font-size: 12px;
+  margin-left: 4px;
+}
+
+/* ---------- viewer ---------- */
+.viewer {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--viewer-bg);
+  border: 1px solid var(--border);
+}
+.drop {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  cursor: pointer;
+  border: 2px dashed var(--drop-border);
+  border-radius: 10px;
+  color: var(--muted);
+  background: transparent;
+}
+.drop.drag {
+  border-color: var(--accent);
+  background: var(--drag-bg);
+}
+.drop-icon {
+  color: var(--muted);
+}
+.drop .hint {
+  font-size: 14px;
+  color: var(--fg);
+}
+.drop .sub {
+  font-size: 12px;
+}
+
+/* 滑块对比：左原图右结果，底纹棋盘格透出透明区 */
+#cmp {
+  position: relative;
+  touch-action: none;
+  max-width: 100%;
+  max-height: 100%;
+  background: repeating-conic-gradient(#252932 0% 25%, #1a1e25 0% 50%) 0 0 /
+    24px 24px;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
+}
+.cmp-img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-drag: none;
+  display: block;
+}
+/* 初始隐藏 after 图（无结果时不显示）；before 图默认无裁剪，全幅可见。
+   JS 在 applyView 里有结果时给两图加内联裁剪（覆盖此默认）。 */
+#afterImg {
+  clip-path: inset(0 0 0 100%);
+}
+#divider {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--accent);
+  left: 100%;
+  cursor: ew-resize;
+}
+#divider::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 2px solid #fff;
+  transform: translate(-50%, -50%);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.5);
+  transition: transform 0.15s;
+}
+#cmp:active #divider::after {
+  transform: translate(-50%, -50%) scale(1.25);
+}
+
+/* ---------- 底部信息条 / 忙碌遮罩 ---------- */
+.bar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 10px 14px;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+  background: linear-gradient(transparent, rgba(0, 0, 0, 0.78));
+}
+.bar .name {
+  font-size: 13px;
+  color: var(--fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 35%;
+}
+.bar .spacer {
+  flex: 1;
+}
+#time {
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.busy {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  align-items: center;
+  justify-content: center;
+  background: rgba(15, 17, 20, 0.6);
+  color: var(--muted);
+}
+.spinner {
+  width: 34px;
+  height: 34px;
+  border: 3px solid var(--input-border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}

@@ -16,7 +16,6 @@ import time
 import warnings
 
 from PIL import Image
-
 from standalone.model_names import MODEL_ALIASES, aliases
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

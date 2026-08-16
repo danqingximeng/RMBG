@@ -1,7 +1,6 @@
 """rmbg_config：默认值、文件加载、坏配置报错。"""
 
 import pytest
-
 from standalone.model_names import DEFAULT_MODEL
 from standalone.rmbg_config import (
     DEFAULT_PORT,

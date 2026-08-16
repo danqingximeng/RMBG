@@ -18,7 +18,6 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import yaml
-
 from standalone.model_names import DEFAULT_MODEL
 
 DEFAULT_CONFIG_DIR = Path.home() / ".config" / "rmbg"

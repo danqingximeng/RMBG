@@ -3,10 +3,14 @@
 cmd_run 的 daemon/local 路径全部打桩，不加载 torch。
 """
 
+import base64
+import io
+import json
+import urllib.error
 from pathlib import Path
 
 import pytest
-
+from PIL import Image
 from standalone import rmbg_cli
 from standalone.rmbg_config import Config
 
@@ -54,9 +58,7 @@ def test_serve_forwards_to_web(monkeypatch):
 
     seen = {}
     monkeypatch.setattr(web, "serve", lambda **kw: seen.update(kw))
-    rc = rmbg_cli.main(
-        ["serve", "--host", "0.0.0.0", "--port", "9001", "--no-preload"]
-    )
+    rc = rmbg_cli.main(["serve", "--host", "0.0.0.0", "--port", "9001", "--no-preload"])
     assert rc == 0
     assert seen["host"] == "0.0.0.0"
     assert seen["port"] == 9001
@@ -76,11 +78,6 @@ def test_list_compat_dash_l(capsys):
     assert "inspyrenet" in capsys.readouterr().out
 
 
-def test_list_names(capsys):
-    assert rmbg_cli.main(["list", "--names"]) == 0
-    assert "biref-lite" in capsys.readouterr().out
-
-
 def test_completion_zsh(capsys):
     assert rmbg_cli.main(["completion", "zsh"]) == 0
     assert "#compdef rmbg" in capsys.readouterr().out
@@ -88,7 +85,7 @@ def test_completion_zsh(capsys):
 
 def test_completion_bash(capsys):
     assert rmbg_cli.main(["completion", "bash"]) == 0
-    assert "complete -F _rmbg rmbg" in capsys.readouterr().out
+    assert "complete -o default -F _rmbg rmbg" in capsys.readouterr().out
 
 
 def test_cmd_run_unknown_model(capsys):
@@ -122,6 +119,7 @@ def test_cmd_run_resolves_config_model_and_port(tmp_path, monkeypatch, capsys):
     def fake_via_daemon(files, args, port):
         seen["model"] = args.model
         seen["files"] = [f.name for f in files]
+        return 0
 
     monkeypatch.setattr(rmbg_cli, "process_via_daemon", fake_via_daemon)
 
@@ -130,3 +128,73 @@ def test_cmd_run_resolves_config_model_and_port(tmp_path, monkeypatch, capsys):
     assert seen["model"] == "biref-lite"
     assert seen["files"] == ["a.png"]
     assert (tmp_path / "out").is_dir()
+
+
+def test_process_via_daemon_http_error(tmp_path, monkeypatch, capsys):
+    img = tmp_path / "a.png"
+    Image.new("RGB", (4, 4), "red").save(img)
+    args = rmbg_cli.build_parser().parse_args(
+        ["run", str(img), "-o", str(tmp_path / "out")]
+    )
+    args.model = "inspyrenet"
+    args.output.mkdir()
+
+    def fake_urlopen(req, timeout=3600):
+        body = io.BytesIO(
+            b'{"error":{"message":"cannot decode image","type":"invalid_request_error"}}'
+        )
+        raise urllib.error.HTTPError(req.full_url, 400, "Bad Request", {}, body)
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    assert rmbg_cli.process_via_daemon([img], args, 8123) == 1
+    err = capsys.readouterr().err
+    assert "daemon error 400" in err
+    assert "cannot decode image" in err
+    assert not list(args.output.iterdir())
+
+
+def test_process_via_daemon_success(tmp_path, monkeypatch, capsys):
+    img = tmp_path / "a.png"
+    Image.new("RGB", (4, 4), "red").save(img)
+    args = rmbg_cli.build_parser().parse_args(
+        ["run", str(img), "-o", str(tmp_path / "out")]
+    )
+    args.model = "inspyrenet"
+    args.output.mkdir()
+    out_png = io.BytesIO()
+    Image.new("RGBA", (4, 4), (0, 0, 0, 0)).save(out_png, format="PNG")
+    b64 = base64.b64encode(out_png.getvalue()).decode()
+
+    def fake_urlopen(req, timeout=3600):
+        return io.BytesIO(
+            json.dumps(
+                {"data": [{"b64_json": b64}], "usage": {"elapsed_ms": 100}}
+            ).encode()
+        )
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    assert rmbg_cli.process_via_daemon([img], args, 8123) == 0
+    assert (args.output / "a.png").read_bytes() == out_png.getvalue()
+
+
+def test_process_local_bad_image_skips_and_continues(tmp_path, capsys):
+    good = tmp_path / "good.png"
+    Image.new("RGB", (2, 2), "red").save(good)
+    bad = tmp_path / "bad.png"
+    bad.write_bytes(b"not an image")
+    args = rmbg_cli.build_parser().parse_args(
+        ["run", str(tmp_path), "-o", str(tmp_path / "out")]
+    )
+    args.model = "inspyrenet"
+    args.output.mkdir()
+    seen = {}
+
+    def fake_remove_bg(image, model, **kw):
+        seen["model"] = model
+        return Image.new("RGB", (2, 2), "blue"), 0.1
+
+    assert rmbg_cli.process_local([good, bad], args, fake_remove_bg) == 1
+    assert (args.output / "good.png").exists()
+    assert not (args.output / "bad.png").exists()
+    assert "bad.png" in capsys.readouterr().err
+    assert seen["model"] == "inspyrenet"

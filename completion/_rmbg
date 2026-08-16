@@ -1,59 +1,25 @@
 #compdef rmbg
 
+# 只补模型名（只有模型名不好记/不好敲）。其余参数、文件、子命令
+# 一律交给 zsh 原生补全（_files 兜底）——注册 compdef 后若不显式
+# 兜底，原生文件补全会被接管且不会自动回退。
+
 _rmbg_models() {
   local -a models
-  models=("${(@f)$(rmbg list --names 2>/dev/null)}")
+  models=("${(@f)$(rmbg list 2>/dev/null)}")
   if (( ${#models[@]} )); then
     _describe 'model' models
   fi
 }
 
-_rmbg_run() {
-  _arguments -s \
-    '(-o --output)'{-o,--output}'[output directory]:output:_files -/' \
-    '(-m --model)'{-m,--model}'[model alias]:model:->models' \
-    '--port[daemon port]:port:' \
-    '--process_res[processing resolution (default 1024)]:resolution:' \
-    '--sensitivity[mask sensitivity 0-1]:sensitivity:' \
-    '--mask_blur[mask edge blur 0-64]:blur:' \
-    '--mask_offset[mask expand/shrink -64..64]:offset:' \
-    '--refine[refine foreground edges (slower)]' \
-    '(-c --config)'{-c,--config}'[config file path]:config file:_files'
-  case $state in
-    models) _rmbg_models ;;
-  esac
-}
-
 _rmbg() {
-  if (( CURRENT == 2 )); then
-    local -a cmds
-    cmds=('run:remove backgrounds from an image or directory' 'serve:start daemon / WebUI' 'list:list model aliases' 'completion:print shell completion script')
-    _describe 'command' cmds
-    return
-  fi
-  case $words[2] in
-    list)
-      _arguments -s \
-        '--names[print one alias per line]' \
-        '(-c --config)'{-c,--config}'[config file path]:config file:_files'
+  case $words[$((CURRENT - 1))] in
+    -m | --model | --preload-model)
+      _rmbg_models
       ;;
-    serve)
-      _arguments -s \
-        '--host[bind address]:host:' \
-        '--port[port]:port:' \
-        '--preload-model[model alias to preload]:model:->models' \
-        '--no-preload[skip startup preload]' \
-        '--idle-kill-min[managed: exit after N idle minutes]:minutes:' \
-        '--idle-unload-min[manual: unload weights after N idle minutes]:minutes:' \
-        '(-c --config)'{-c,--config}'[config file path]:config file:_files'
-      case $state in
-        models) _rmbg_models ;;
-      esac
+    *)
+      _files
       ;;
-    completion)
-      _arguments '1:shell:(zsh bash)'
-      ;;
-    *) _rmbg_run ;;
   esac
 }
 

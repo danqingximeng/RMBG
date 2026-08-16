@@ -1,49 +1,13 @@
 # bash completion for rmbg
+# 只补模型名（只有模型名不好记/不好敲）。其余交给默认文件名补全
+# （complete -o default：函数无匹配时回退 readline 默认补全）。
 _rmbg() {
-  local cur prev words cword
+  local cur prev
   _init_completion || return
-  local sub="${words[1]}"
-  if [[ $cword -eq 1 ]]; then
-    COMPREPLY=($(compgen -W "run serve list completion --help" -- "$cur"))
-    return
-  fi
-  case $sub in
-    run)
-      case $prev in
-        -m | --model)
-          COMPREPLY=($(compgen -W "$(rmbg list --names 2>/dev/null)" -- "$cur"))
-          ;;
-        -o | --output)
-          _filedir -d
-          ;;
-        -c | --config)
-          _filedir
-          ;;
-        *)
-          COMPREPLY=($(compgen -W "-o --output -m --model --port --process_res --sensitivity --mask_blur --mask_offset --refine -c --config --help" -- "$cur"))
-          _filedir
-          ;;
-      esac
-      ;;
-    serve)
-      case $prev in
-        --preload-model)
-          COMPREPLY=($(compgen -W "$(rmbg list --names 2>/dev/null)" -- "$cur"))
-          ;;
-        -c | --config)
-          _filedir
-          ;;
-        *)
-          COMPREPLY=($(compgen -W "--host --port --preload-model --no-preload --idle-kill-min --idle-unload-min -c --config --help" -- "$cur"))
-          ;;
-      esac
-      ;;
-    list)
-      COMPREPLY=($(compgen -W "--names -c --config" -- "$cur"))
-      ;;
-    completion)
-      COMPREPLY=($(compgen -W "zsh bash" -- "$cur"))
+  case $prev in
+    -m | --model | --preload-model)
+      COMPREPLY=($(compgen -W "$(rmbg list 2>/dev/null)" -- "$cur"))
       ;;
   esac
 }
-complete -F _rmbg rmbg
+complete -o default -F _rmbg rmbg

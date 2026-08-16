@@ -41,20 +41,18 @@ import urllib.request
 from pathlib import Path
 
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from PIL import Image
-from starlette.concurrency import run_in_threadpool
-
 from standalone import rmbg_core
 from standalone.model_names import DEFAULT_MODEL, MODEL_ALIASES
 from standalone.rmbg_config import Config, ConfigError
 from standalone.rmbg_core import available_models, remove_bg
+from starlette.concurrency import run_in_threadpool
 
 app = FastAPI(title="RMBG Standalone")
 
 WEB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web")
-app.mount("/static", StaticFiles(directory=WEB_DIR), name="static")
 
 _state = {
     "t": time.monotonic(),
@@ -66,13 +64,6 @@ _state = {
     "model_default": DEFAULT_MODEL,
     "config": None,
 }
-
-
-@app.get("/", response_class=HTMLResponse)
-def index():
-    return HTMLResponse(
-        open(os.path.join(WEB_DIR, "index.html"), encoding="utf-8").read()
-    )
 
 
 @app.get("/health")
@@ -233,9 +224,6 @@ def _process(images, opts):
         }, 200
     except Exception as e:  # noqa: BLE001  # any failure must become JSON 500, not crash the daemon
         return _err_payload(f"server error: {e}", 500)
-    finally:
-        _state["busy"] = False
-        _state["t"] = time.monotonic()
 
 
 @app.post("/api/rmbg")
@@ -290,6 +278,10 @@ async def rmbg(request: Request):
     finally:
         _state["busy"] = False
         _state["t"] = time.monotonic()
+
+
+# 根挂载放最后：API 路由已注册完毕，未被匹配的路径交给静态 WebUI
+app.mount("/", StaticFiles(directory=WEB_DIR, html=True), name="web")
 
 
 def _probe(port):
@@ -385,15 +377,16 @@ def serve(
     _state["idle_kill_min"] = idle_kill_min
     _state["idle_unload_min"] = idle_unload_min
     _state["model_default"] = model_default
-    _state["config"] = Config(
-        model=cfg.model,
-        host=host,
-        port=port,
-        idle_unload_min=idle_unload_min,
-        idle_kill_min=idle_kill_min,
-        preload=preload,
-        config_path=cfg.config_path,
-    ).to_dict()
+    # 生效配置（CLI 合并后）直接落 dict，/api/config 原样返回
+    _state["config"] = {
+        "model": cfg.model,
+        "host": host,
+        "port": port,
+        "idle_unload_min": idle_unload_min,
+        "idle_kill_min": idle_kill_min,
+        "preload": preload,
+        "config_path": str(cfg.config_path) if cfg.config_path else None,
+    }
 
     if not managed:
         status, existing = _probe(port)
