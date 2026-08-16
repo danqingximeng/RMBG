@@ -15,6 +15,7 @@ model nodes (see lazy import of rmbg_core / daemon helpers in main()).
 """
 
 import argparse
+import base64
 import io
 import json
 import os
@@ -46,7 +47,9 @@ def iter_images(path):
 
 def daemon_alive(port):
     try:
-        with urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=0.3) as r:
+        with urllib.request.urlopen(
+            f"http://127.0.0.1:{port}/health", timeout=0.3
+        ) as r:
             data = json.loads(r.read())
         return data.get("service") == "rmbg-daemon"
     except Exception:
@@ -58,10 +61,19 @@ def spawn_daemon(port, model):
     pythonpath = env.get("PYTHONPATH", "")
     env["PYTHONPATH"] = str(REPO_ROOT) + (os.pathsep + pythonpath if pythonpath else "")
     proc = subprocess.Popen(
-        [sys.executable, "-m", "standalone.rmbg_web",
-         "--port", str(port), "--managed", "--preload-model", model],
+        [
+            sys.executable,
+            "-m",
+            "standalone.rmbg_web",
+            "--port",
+            str(port),
+            "--managed",
+            "--preload-model",
+            model,
+        ],
         start_new_session=True,
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
         env=env,
     )
     for _ in range(60):
@@ -85,10 +97,10 @@ def multipart_body(boundary, args, file_bytes, filename):
     ]
     for k, v in fields:
         parts.append(
-            f"--{boundary}\r\nContent-Disposition: form-data; name=\"{k}\"\r\n\r\n{v}\r\n".encode()
+            f'--{boundary}\r\nContent-Disposition: form-data; name="{k}"\r\n\r\n{v}\r\n'.encode()
         )
     parts.append(
-        f"--{boundary}\r\nContent-Disposition: form-data; name=\"files\"; filename=\"{filename}\"\r\n"
+        f'--{boundary}\r\nContent-Disposition: form-data; name="file"; filename="{filename}"\r\n'
         f"Content-Type: image/png\r\n\r\n".encode()
     )
     parts.append(file_bytes)
@@ -105,17 +117,24 @@ def process_via_daemon(files, args, port):
         boundary = uuid.uuid4().hex
         body = multipart_body(boundary, args, buf.getvalue(), path.name)
         req = urllib.request.Request(
-            url, data=body,
-            headers={"Content-Type": f"multipart/form-data; boundary={boundary}"})
+            url,
+            data=body,
+            headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+        )
         t0 = time.time()
         with urllib.request.urlopen(req, timeout=3600) as r:
-            out_bytes = r.read()
+            payload = json.loads(r.read())
         elapsed = time.time() - t0
+        out_bytes = base64.b64decode(payload["data"][0]["b64_json"])
         total += elapsed
         out_path = args.output / (path.stem + ".png")
         out_path.write_bytes(out_bytes)
-        print(f"[{i}/{len(files)}] {path.name}: {elapsed:.1f}s -> {out_path.name} (daemon)")
-    print(f"Done. {len(files)} image(s), total {total:.1f}s, avg {total / len(files):.1f}s/image")
+        print(
+            f"[{i}/{len(files)}] {path.name}: {elapsed:.1f}s -> {out_path.name} (daemon)"
+        )
+    print(
+        f"Done. {len(files)} image(s), total {total:.1f}s, avg {total / len(files):.1f}s/image"
+    )
 
 
 def process_local(files, args, remove_bg):
@@ -123,34 +142,77 @@ def process_local(files, args, remove_bg):
     for i, path in enumerate(files, 1):
         image = Image.open(path)
         t0 = time.time()
-        result, _ = remove_bg(image, args.model,
-                              process_res=args.process_res,
-                              sensitivity=args.sensitivity,
-                              mask_blur=args.mask_blur,
-                              mask_offset=args.mask_offset,
-                              refine_foreground=args.refine)
+        result, _ = remove_bg(
+            image,
+            args.model,
+            process_res=args.process_res,
+            sensitivity=args.sensitivity,
+            mask_blur=args.mask_blur,
+            mask_offset=args.mask_offset,
+            refine_foreground=args.refine,
+        )
         elapsed = time.time() - t0
         total += elapsed
         out_path = args.output / (path.stem + ".png")
         result.save(out_path)
-        print(f"[{i}/{len(files)}] {path.name}: {elapsed:.1f}s -> {out_path.name} (local)")
-    print(f"Done. {len(files)} image(s), total {total:.1f}s, avg {total / len(files):.1f}s/image")
+        print(
+            f"[{i}/{len(files)}] {path.name}: {elapsed:.1f}s -> {out_path.name} (local)"
+        )
+    print(
+        f"Done. {len(files)} image(s), total {total:.1f}s, avg {total / len(files):.1f}s/image"
+    )
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Remove image backgrounds (CPU-friendly)")
-    parser.add_argument("input", type=Path, nargs="?", help="Image file or directory of images")
+    parser = argparse.ArgumentParser(
+        description="Remove image backgrounds (CPU-friendly)"
+    )
+    parser.add_argument(
+        "input", type=Path, nargs="?", help="Image file or directory of images"
+    )
     parser.add_argument("-o", "--output", type=Path, help="Output directory")
-    parser.add_argument("-m", "--model", default=DEFAULT_MODEL,
-                        help=f"Model alias (see -l; default: {DEFAULT_MODEL})")
-    parser.add_argument("-l", "--list-models", action="store_true", help="List available model aliases and exit")
-    parser.add_argument("--port", type=int, default=DEFAULT_PORT,
-                        help=f"Daemon port (default: {DEFAULT_PORT})")
-    parser.add_argument("--process_res", type=int, default=1024, help="Processing resolution (default: 1024)")
-    parser.add_argument("--sensitivity", type=float, default=1.0, help="Mask sensitivity 0-1 (default: 1.0)")
-    parser.add_argument("--mask_blur", type=int, default=0, help="Mask edge blur 0-64 (default: 0)")
-    parser.add_argument("--mask_offset", type=int, default=0, help="Mask expand/shrink -64..64 (default: 0)")
-    parser.add_argument("--refine", action="store_true", help="Refine foreground edges (slower)")
+    parser.add_argument(
+        "-m",
+        "--model",
+        default=DEFAULT_MODEL,
+        help=f"Model alias (see -l; default: {DEFAULT_MODEL})",
+    )
+    parser.add_argument(
+        "-l",
+        "--list-models",
+        action="store_true",
+        help="List available model aliases and exit",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=DEFAULT_PORT,
+        help=f"Daemon port (default: {DEFAULT_PORT})",
+    )
+    parser.add_argument(
+        "--process_res",
+        type=int,
+        default=1024,
+        help="Processing resolution (default: 1024)",
+    )
+    parser.add_argument(
+        "--sensitivity",
+        type=float,
+        default=1.0,
+        help="Mask sensitivity 0-1 (default: 1.0)",
+    )
+    parser.add_argument(
+        "--mask_blur", type=int, default=0, help="Mask edge blur 0-64 (default: 0)"
+    )
+    parser.add_argument(
+        "--mask_offset",
+        type=int,
+        default=0,
+        help="Mask expand/shrink -64..64 (default: 0)",
+    )
+    parser.add_argument(
+        "--refine", action="store_true", help="Refine foreground edges (slower)"
+    )
     args = parser.parse_args()
 
     if args.list_models:
@@ -184,6 +246,7 @@ def main():
     else:
         print("No daemon available, processing locally")
         from standalone.rmbg_core import remove_bg
+
         process_local(files, args, remove_bg)
 
 
