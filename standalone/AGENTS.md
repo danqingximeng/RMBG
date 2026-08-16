@@ -10,19 +10,34 @@ uv venv .venv
 uv pip install --python .venv/bin/python torch torchvision --index-url https://download.pytorch.org/whl/cpu
 uv pip install --python .venv/bin/python -r standalone/requirements-standalone.txt
 
-# 2. CLI：单张或目录批量（模型用别名，-l 查看，-m 指定）
+# 2. CLI 子命令（默认 run；模型用别名，`rmbg list` 查看，-m 指定）
 .venv/bin/python -m standalone.rmbg_cli <图片或目录> -o <输出目录> -m inspyrenet
-./rmbg -l                # 仓库根的 bash 包装脚本，任何 cwd 都能用
-alias rmbg='/path/to/本仓库/rmbg'   # 可选：加进 shell 配置
+./rmbg <图片或目录> -o <输出目录>          # 仓库根的 bash 包装脚本，任何 cwd 都能用（等价上一行）
+./rmbg list                                # 模型别名（顶层 -l 是兼容别名）
+./rmbg completion zsh|bash                 # 打印补全脚本（completion/ 目录）
+alias rmbg='/path/to/本仓库/rmbg'          # 可选：加进 shell 配置
 
 # 3. WebUI / 常驻守护（默认端口 8123）
-.venv/bin/python -m standalone.rmbg_web                     # 手动常驻：默认预载 inspyrenet，http://127.0.0.1:8123
-.venv/bin/python -m standalone.rmbg_web --preload-model biref-lite --idle-unload-min 5  # 预载 biref-lite，闲置 5 分钟卸载权重
-.venv/bin/python -m standalone.rmbg_web --no-preload                                    # 不预载（首次请求才加载模型）
-.venv/bin/python -m standalone.rmbg_web --managed --idle-kill-min 5              # CLI 拉起模式：闲置 5 分钟自杀
+./rmbg serve                                                  # 手动常驻：默认预载，http://127.0.0.1:8123
+./rmbg serve --preload-model biref-lite --idle-unload-min 5   # 预载 biref-lite，闲置 5 分钟卸载权重
+./rmbg serve --no-preload                                     # 不预载（首次请求才加载模型）
+.venv/bin/python -m standalone.rmbg_web --managed --idle-kill-min 5  # CLI 内部 spawn 用（勿手动）
 ```
 
-**serve 默认预载**（模型取 `--preload-model`，默认 `inspyrenet`）；`--no-preload` 关闭预载（两者同给时 `--no-preload` 生效）。CLI 自动拉起的守护固定传 `--preload-model <请求的模型>`。
+**serve 默认预载**（模型取 `--preload-model`，缺省 = config `model` 或 `inspyrenet`）；`--no-preload` 关闭预载（两者同给时 `--no-preload` 生效）。CLI 自动拉起的守护固定传 `--preload-model <请求的模型>`。host/port/闲置分钟数未指定时回落 config 文件（见下）。
+
+## 配置文件（`~/.config/rmbg/config.yaml`，全可选，不主动创建）
+
+优先级 **CLI 参数 > config > 内建默认**；`-c/--config` 可覆盖路径。加载在 `standalone/rmbg_config.py`（`Config.load()`，风格与 upscayl-py 的 `upscayl/config.py` 一致）：
+
+```yaml
+model: biref-lite       # 默认模型：run 的 -m 缺省、serve 的预载模型、/api/models 的 default 三处联动
+host: 127.0.0.1         # serve 绑定地址
+port: 8123              # serve 端口，也是 run 的 daemon 端口
+idle_unload_min: 5      # 手动守护闲置 N 分钟后卸载权重（0=永不）
+idle_kill_min: 5        # 托管守护闲置 N 分钟后自杀（0=永不）
+preload: true           # serve 启动时预载
+```
 
 **守护生命周期**（`_state` 里的 `managed` 标志 + `_idle_thread` 每 5s 轮询）：
 
@@ -49,17 +64,19 @@ alias rmbg='/path/to/本仓库/rmbg'   # 可选：加进 shell 配置
 | `biref-lite` / `biref-lite2k` / `biref-dynamic` / `biref-lite-matting` / `biref-toon` | BiRefNet_lite / _lite-2K / _dynamic / _lite-matting / _toonout |
 | `lucida` | Lucida |
 
-别名表在 `standalone/model_names.py`（**零依赖**，`-l`/`--help` 不加载 torch），新增模型须在此登记；原模型名经 `remove_bg` 的 fallback 仍可用。`DEFAULT_MODEL = "inspyrenet"` 是 CLI 与 WebUI/守护的统一默认模型（都在此定义，勿在别处硬编码）。`rmbg_core.available_models()` 返回别名列表（CLI 与 WebUI 共用）。
+别名表在 `standalone/model_names.py`（**零依赖**，`list`/`--help` 不加载 torch），新增模型须在此登记；原模型名经 `remove_bg` 的 fallback 仍可用。`DEFAULT_MODEL = "inspyrenet"` 是 CLI 与 WebUI/守护的统一默认模型（都在此定义，勿在别处硬编码）。`rmbg_core.available_models()` 返回别名列表（CLI 与 WebUI 共用）。
 
 ## 文件职责
 
 - `folder_paths.py` — ComfyUI `folder_paths` 垫片。节点模块顶部 `import folder_paths` 且用 `folder_paths.models_dir`，垫片提供 `models_dir`（指向仓库根 `models/`）+ 空操作 `add_model_folder_path`。修改节点时若用到新的 `folder_paths` 属性需同步补垫片。
-- `model_names.py` — 模型别名表，零依赖，仅用于 `-l`/`--help` 快速输出。
+- `model_names.py` — 模型别名表，零依赖，仅用于 `list`/`--help` 快速输出。
+- `rmbg_config.py` — 配置加载（`Config.load()` / `ConfigError` / `to_dict()`），路径 `~/.config/rmbg/config.yaml`，字段见上；依赖仅 pyyaml + model_names（轻量，CLI 顶层可安全 import）。
+- `completion/`（仓库根，非本目录）— `_rmbg`（zsh）+ `rmbg.bash`；`rmbg completion zsh|bash` 原样打印。zsh 补全经 `~/.oh-my-zsh/custom/completions/_rmbg` 符号链接安装（改仓库文件即同步；装后需新开终端）。模型名补全靠 `rmbg list --names` 动态取。
 - `rmbg_core.py` — 核心。按文件路径加载 `py/AILab_RMBG.py`、`py/AILab_BiRefNet.py`（**不能 import 仓库根 `__init__.py`**，它扫描加载全部节点含 SAM2/SAM3 等未安装依赖）。对外 API：`remove_bg(pil_image, model, **params) -> (rgba_pil, elapsed_seconds)`、`available_models()`、`warmup(alias)`、`unload_all()`（清空两家族模型权重并释放内存）。内部有 `_lock` 串行化推理，模型实例是**进程级单例**（`_get_rmbg_node()`/`_get_birefnet_node()`，勿在每请求新建，否则每请求重载权重）。**节点模块按模型家族懒加载**（inspyrenet/rmbg2/ben/ben2 → 只加载 AILab_RMBG；biref-* → 只加载 AILab_BiRefNet），模块顶部已设 warnings 过滤（flet/torch.meshgrid/timm）。
-- `rmbg_cli.py` — 批量 CLI，输出同名透明 PNG。三条处理路径：`daemon_alive(port)`（校验 `/health` 返回 `service=="rmbg-daemon"`）→ `spawn_daemon`（60s 内轮询存活）→ `process_via_daemon`（HTTP 转发，multipart 表单字段名 `file`，解析响应 `data[0].b64_json` 后 base64 解码落盘）；全失败则 `process_local`。输出行带 `(daemon)`/`(local)` 标记。`-m` 默认 `DEFAULT_MODEL`。`remove_bg` 在 `main()` 内懒导入，保证 `-l`/`--help` 秒出（实测 0.1s，此前 8.1s/2.5s）。
+- `rmbg_cli.py` — 子命令化 CLI（镜像 upscayl 的 cli.py 结构）：`run`（默认，首参不是子命令时自动插入）/ `serve`（解析后调 `rmbg_web.serve()`，自身不实现 daemon）/ `list`（别名每行一个；顶层 `-l`/`--list-models` 兼容别名在 main() 里改写成 list）/ `completion zsh|bash`（打印 `completion/` 下脚本）。run 输出同名透明 PNG，三条处理路径：`daemon_alive(port)`（校验 `/health` 返回 `service=="rmbg-daemon"`）→ `spawn_daemon`（60s 内轮询存活）→ `process_via_daemon`（HTTP 转发，multipart 表单字段名 `file`，解析响应 `data[0].b64_json` 后 base64 解码落盘）；全失败则 `process_local`。输出行带 `(daemon)`/`(local)` 标记。`-m` 缺省 = config `model` 或 `DEFAULT_MODEL`；`--port` 缺省 = config `port`（run 转发/spawn 用）。`rmbg_web`/`rmbg_core` 懒导入，保证 `list`/`--help` 秒出（实测 0.1s，此前 8.1s/2.5s）。
 - `tests/` — pytest（`uv pip install pytest` 后 `python -m pytest standalone/tests -q`）。`remove_bg` 全程 monkeypatch，不加载 torch。**conftest.py 里有sys.modules 假包补丁**：仓库根的 ComfyUI `__init__.py` 会让 pytest 把根目录当 Package 收集并 import，其 `load_nodes()` 会 rglob 执行全仓库 .py（包括 `.venv`，曾触发 numba 拿 pytest argv 当 CLI 参数直接 SystemExit），conftest 预塞 `sys.modules["RMBG"]` 假包顶掉——别删这段。
-- `rmbg_web.py` + `web/index.html` — FastAPI 守护/WebUI。**API 字段与 upscayl-py 同构（OpenAI 风格信封，snake_case）**：`GET /health` 返回 `{"status":"ok", "service": "rmbg-daemon", managed, idle_kill_min, idle_unload_min, busy, model_loaded}`（CLI 靠 `service` 识别）；`GET /api/models` 返回 `{"data":[{"id":别名,"default":bool}],"default":...}`（前端用 `default` 设默认模型，**勿用 `data[0]`**——排序后是 ben）；`POST /api/managed {"managed": bool}` 运行时晋升/降级（serve 晋升用它）；`POST /api/rmbg` 输入两种——multipart（字段名 `file`，可多个）或 JSON（`{"image": data-URI|本地路径|URL}`，选项字段同名）——成功返回 `{"created","model","data":[{"filename","b64_json","format":"png","width","height","size"}],"usage":{"elapsed_ms"}}`（多文件即 `data` 多项，无 zip），失败返回 `{"error":{"message","type":"invalid_request_error|not_found_error|server_error"}}` + 400/404/500。未知模型在进 torch 前就 400（`_valid_models()` 校验别名+原名）；解析/推理整体在 `run_in_threadpool` 里跑（推理 30s+，绝不能阻塞事件循环卡死 `/health`）。`main()` 支持 `--host/--port`(默认 8123)/`--preload-model`(默认 `DEFAULT_MODEL`)/`--no-preload`/`--managed`/`--idle-kill-min`/`--idle-unload-min`（默认均 5 分钟）。**默认预载**（`--preload-model` 指定的模型），`--no-preload` 关闭。`managed`/`idle_*` 存进 `_state`，`_idle_thread()`（无参）每 5s 读 `_state` 实时判断：managed 超时 `os._exit(0)`，manual 超时调 `unload_all()` 并重置计时。handler 用 busy/`finally` 更新活动时间，预载完成后重置计时，避免 health 检查/长请求误触发卸载。serve 启动前 `_probe(port)`（TCP 探测 + /health）区分 已跑 rmbg（晋升或 no-op）/非 rmbg（报错 exit 1）/空闲（启动）。
-- `web/index.html` — **单图** WebUI（多图去掉，用 CLI）。viewer 永远独占剩余全部空间（`object-fit:contain`），**参数面板是左抽屉**（全尺寸统一，`width:min(85vw,320px)`，`body.open` 类 + `translateX` 控制）：桌面(>900px)默认展开、折叠后 `main` 的 `margin-left` 过渡为 0（viewer 全宽，适合横向图）；手机(≤900px)默认收起、覆盖式弹出（带遮罩），viewer 保持全屏。头部 ☰ 开关 + 抽屉内 ✕ + 遮罩点击关闭。`matchMedia("(min-width:901px)")` 初始化默认态并在断点切换时重置（不记 localStorage）。**手机端左边缘右滑呼出侧边栏**（`touchstart` 起手 x<32px、`touchmove` dx>60 且横向为主时 `setOpen(true)`；**不实现右滑关闭**——侧边栏有滑块会冲突）。手机端点 run 自动收起抽屉。计时显示在 viewer 底部 bar（`#time`，读响应 `usage.elapsed_ms`）。拖拽/点击共用 `pickFile` 保存 `fileObj`（拖拽时 `<input type=file>` 的 `.files` 为空，勿用它）。
+- `rmbg_web.py` + `web/index.html` — FastAPI 守护/WebUI。**API 字段与 upscayl-py 同构（OpenAI 风格信封，snake_case）**：`GET /health` 返回 `{"status":"ok", "service": "rmbg-daemon", managed, idle_kill_min, idle_unload_min, busy, model_loaded}`（CLI 靠 `service` 识别）；`GET /api/config` 返回生效配置（serve() 已跑时含 CLI 合并结果，存 `_state["config"]`；未 serve 的 TestClient 场景回落 `Config.load()`）；`GET /api/models` 返回 `{"data":[{"id":别名,"default":bool}],"default":...}`（`default` 取 `_state["model_default"]` = config model 或 DEFAULT_MODEL，前端用它设默认模型，**勿用 `data[0]`**——排序后是 ben）；`POST /api/managed {"managed": bool}` 运行时晋升/降级（serve 晋升用它）；`POST /api/rmbg` 输入两种——multipart（字段名 `file`，可多个）或 JSON（`{"image": data-URI|本地路径|URL}`，选项字段同名）——成功返回 `{"created","model","data":[{"filename","b64_json","format":"png","width","height","size"}],"usage":{"elapsed_ms"}}`（多文件即 `data` 多项，无 zip），失败返回 `{"error":{"message","type":"invalid_request_error|not_found_error|server_error"}}` + 400/404/500。未知模型在进 torch 前就 400（`_valid_models()` 校验别名+原名，缺省模型也走 `_state["model_default"]`）；解析/推理整体在 `run_in_threadpool` 里跑（推理 30s+，绝不能阻塞事件循环卡死 `/health`）。启动逻辑在 `serve(host, port, preload_model, no_preload, managed, idle_kill_min, idle_unload_min, config_path)`——**None 的参数按 CLI > config > 内建默认解析**（`main()` 的 argparse 壳和 `rmbg_cli serve` 子命令都调它；spawn_daemon 依赖的 `python -m standalone.rmbg_web --managed` 仍可直接跑）。`--preload-model` 缺省 = config model；显式给 `--preload-model` 时即使 config `preload: false` 也预载。`managed`/`idle_*` 存进 `_state`，`_idle_thread()`（无参）每 5s 读 `_state` 实时判断：managed 超时 `os._exit(0)`，manual 超时调 `unload_all()` 并重置计时。handler 用 busy/`finally` 更新活动时间，预载完成后重置计时，避免 health 检查/长请求误触发卸载。serve 启动前 `_probe(port)`（TCP 探测 + /health）区分 已跑 rmbg（晋升或 no-op）/非 rmbg（报错 exit 1）/空闲（启动）。
+- `web/index.html` + `web/icon.svg` — **单图** WebUI（多图去掉，用 CLI）。**布局对齐 upscayl**：`.panel` 是 `<main>`（`display:flex`）里的流内 flex 列（桌面 ≥901px：宽 300px、右缘 border、无 transform，页头永远完整可见——旧版 `position:fixed;top:0` 全高抽屉在桌面端会盖住页头左半，已修）；手机(≤900px) panel 退化成 fixed 覆盖式抽屉（`body.open` + `translateX` + 遮罩，☰/✕/遮罩关闭、左缘右滑呼出，`matchMedia` 断点切换，不记 localStorage），桌面端 ☰/✕/遮罩 `display:none`。**对比是滑块视图**（无原图/结果按钮）：`#cmp` 容器（beforeImg/afterImg 绝对定位叠加 + `#divider` 2px 蓝线带圆点把手），after 图 `clip-path: inset(0 0 0 X%)` **左原图右结果**；Pointer Events + `setPointerCapture` 拖动，`#cmp{touch-action:none}`；`fitCmp()` 按图片宽高比把 `#cmp` 缩放进 viewer（留 48px 边距），resize 时重算。**RMBG 特有：`#cmp` 底纹是 conic 棋盘格**（`repeating-conic-gradient`），透明区直接可见。无结果时 afterImg/divider 隐藏（只有原图）。计时显示在 viewer 底部 bar（`#time`，读响应 `usage.elapsed_ms` + 宽高 + 模型）。拖拽/点击共用 `pickFile` 保存 `fileObj`（拖拽时 `<input type=file>` 的 `.files` 为空，勿用它）。`icon.svg`：圆角深底 + 灰阶棋盘格 + 蓝色人物剪影（#3b82f6），favicon 与页头 logo 共用（`/static/icon.svg`）。
 - `requirements-standalone.txt` — 裁剪后的依赖（不含 SAM/SDMatte/GroundingDINO 等重型包）。
 
 ## 关键约束与坑
@@ -81,7 +98,7 @@ alias rmbg='/path/to/本仓库/rmbg'   # 可选：加进 shell 配置
 | `rmbg2` | ~52-58s |
 | `birefnet` | ~72s |
 
-已实测：inspyrenet、rmbg2、biref-lite、birefnet、CLI 批量、WebUI 单图（原图/结果切换、下载、计时）、守护生命周期（预载→闲置卸载→自动重载、managed 自杀、serve 晋升）、CLI 三路径（复用/拉起/回退）。ben/ben2/其余 BiRefNet 变体未实测，走同一代码路径。
+已实测：inspyrenet、rmbg2、biref-lite、birefnet、CLI 批量、WebUI 单图（滑块对比拖动、棋盘格透明、下载、计时）、守护生命周期（预载→闲置卸载→自动重载、managed 自杀、serve 晋升）、CLI 三路径（复用/拉起/回退）、子命令分发（默认 run/`-l` 兼容/`rmbg serve` 经 cli 与 `python -m standalone.rmbg_web` 双路）、config 优先级（CLI>config>内建：port/model/idle/preload 各验证一次）、spawn_daemon 转发 `-c`（拉起的守护 idle_kill 与 config 一致）。ben/ben2/其余 BiRefNet 变体未实测，走同一代码路径。
 
 ## 守护生命周期实测（8123/8126/8127/8131-8134 端口，biref-lite）
 

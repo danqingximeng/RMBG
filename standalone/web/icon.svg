@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <defs>
+    <pattern id="checker" width="16" height="16" patternUnits="userSpaceOnUse">
+      <rect width="16" height="16" fill="#22252c"/>
+      <rect width="8" height="8" fill="#2c3039"/>
+      <rect x="8" y="8" width="8" height="8" fill="#2c3039"/>
+    </pattern>
+    <clipPath id="round">
+      <rect x="2" y="2" width="60" height="60" rx="14"/>
+    </clipPath>
+  </defs>
+  <g clip-path="url(#round)">
+    <rect x="2" y="2" width="60" height="60" fill="#1d2026"/>
+    <rect x="2" y="2" width="60" height="60" fill="url(#checker)"/>
+    <circle cx="32" cy="24" r="10.5" fill="#3b82f6"/>
+    <path d="M11 62c0-13.5 9.4-21 21-21s21 7.5 21 21z" fill="#3b82f6"/>
+  </g>
+  <rect x="2.75" y="2.75" width="58.5" height="58.5" rx="13.25" fill="none" stroke="#3a3f4a" stroke-width="1.5"/>
+</svg>
