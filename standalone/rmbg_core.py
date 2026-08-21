@@ -139,12 +139,44 @@ def _unload_others(target_loader):
         _malloc_trim()
 
 
+def _allowed_set() -> set[str] | None:
+    """Return whitelist from config if set, else None (all allowed)."""
+    try:
+        from standalone.rmbg_config import Config
+
+        return Config.load().resolve_allowed()
+    except Exception:
+        return None
+
+
+def _check_allowed(model: str) -> None:
+    """Fail fast if model not in whitelist; no download attempt."""
+    allowed = _allowed_set()
+    if allowed is None:
+        return
+    # model may be alias or original; _resolve gives alias->orig, but whitelist stores aliases
+    if model in allowed:
+        return
+    orig = _resolve(model)
+    # also accept original names that map to an allowed alias
+    for alias in allowed:
+        if MODEL_ALIASES.get(alias, alias) == orig:
+            return
+    raise ValueError(
+        f"unknown model '{model}'. available: {', '.join(sorted(allowed))}"
+    )
+
+
 def available_models():
-    return aliases()
+    allowed = _allowed_set()
+    if allowed is None:
+        return aliases()
+    return sorted(allowed)
 
 
 def warmup(model):
     """Load model weights without inference (downloads on first use)."""
+    _check_allowed(model)
     loader, orig = _loader_for(model)
     with _lock:
         ok, _ = loader.check_model_cache(orig)
@@ -207,6 +239,7 @@ def remove_bg(
     (see model_names.MODEL_ALIASES). Original node names also work.
     Models are auto-downloaded to models/RMBG/ on first use.
     """
+    _check_allowed(model)
     import torch
 
     orig = _resolve(model)

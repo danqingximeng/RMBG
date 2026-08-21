@@ -48,9 +48,9 @@ def test_explicit_run(run_stub):
 
 def test_run_model_from_config(run_stub, tmp_path):
     f = tmp_path / "c.yaml"
-    f.write_text("model: biref-lite\n")
+    f.write_text("default_model: biref-lite\n")
     assert rmbg_cli.main(["img.png", "-o", "out", "-c", str(f)]) == 0
-    assert run_stub["cfg"].model == "biref-lite"
+    assert run_stub["cfg"].default_model == "biref-lite"
 
 
 def test_serve_forwards_to_web(monkeypatch):
@@ -90,7 +90,12 @@ def test_completion_bash(capsys):
 
 def test_cmd_run_unknown_model(capsys):
     args = rmbg_cli.build_parser().parse_args(["run", "x.png", "-o", "out"])
-    assert rmbg_cli.cmd_run(args, Config(model="no-such")) == 1
+    assert (
+        rmbg_cli.cmd_run(
+            args, Config(default_model="no-such", allowed_models=["inspyrenet"])
+        )
+        == 1
+    )
     assert "no-such" in capsys.readouterr().err
 
 
@@ -123,7 +128,7 @@ def test_cmd_run_resolves_config_model_and_port(tmp_path, monkeypatch, capsys):
 
     monkeypatch.setattr(rmbg_cli, "process_via_daemon", fake_via_daemon)
 
-    assert rmbg_cli.cmd_run(args, Config(model="biref-lite", port=9123)) == 0
+    assert rmbg_cli.cmd_run(args, Config(default_model="biref-lite", port=9123)) == 0
     assert seen["port"] == 9123
     assert seen["model"] == "biref-lite"
     assert seen["files"] == ["a.png"]

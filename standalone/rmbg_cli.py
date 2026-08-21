@@ -298,13 +298,26 @@ def _load_config(config_path: str | None) -> Config:
         sys.exit(1)
 
 
+def _allowed_or_all(cfg: Config) -> set[str]:
+    allowed = cfg.resolve_allowed()
+    return allowed if allowed is not None else set(MODEL_ALIASES)
+
+
 def cmd_run(args, cfg: Config) -> int:
+    allowed = _allowed_or_all(cfg)
     model = args.model or cfg.resolve_model()
-    if model not in MODEL_ALIASES:
+    if model not in allowed and model not in {MODEL_ALIASES.get(a, a) for a in allowed}:
         print(f"Unknown model '{model}'. Available models:", file=sys.stderr)
-        for name in sorted(MODEL_ALIASES):
+        for name in sorted(allowed):
             print(f"  {name}", file=sys.stderr)
         return 1
+    # canonicalize to alias for downstream
+    if model not in allowed:
+        # model is an original name that maps to an allowed alias
+        for alias in allowed:
+            if MODEL_ALIASES.get(alias, alias) == model:
+                model = alias
+                break
     if not args.input.exists():
         print(f"error: input not found: {args.input}", file=sys.stderr)
         return 1
@@ -348,8 +361,15 @@ def cmd_serve(args) -> int:
     return 0
 
 
-def cmd_list(args) -> int:
-    for name in sorted(MODEL_ALIASES):
+def cmd_list(args, cfg: Config | None = None) -> int:
+    if cfg is None:
+        cfg = (
+            Config.load(Path(args.config).expanduser() if args.config else None)
+            if hasattr(args, "config")
+            else Config.load()
+        )
+    allowed = _allowed_or_all(cfg)
+    for name in sorted(allowed):
         print(name)
     return 0
 
@@ -376,7 +396,7 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_completion(args)
     cfg = _load_config(args.config)
     if args.command == "list":
-        return cmd_list(args)
+        return cmd_list(args, cfg)
     if args.command == "serve":
         return cmd_serve(args)
     return cmd_run(args, cfg)

@@ -182,7 +182,8 @@ def test_api_config_fallback(client, monkeypatch, tmp_path):
     missing = tmp_path / "none.yaml"
     monkeypatch.setattr(rmbg_config, "DEFAULT_CONFIG_FILE", missing)
     body = c.get("/api/config").json()
-    assert body["model"] is None
+    assert body["default_model"] is None
+    assert body["allowed_models"] is None
     assert body["host"] == "127.0.0.1"
     assert body["port"] == 8123
     assert body["preload"] is True
@@ -191,7 +192,7 @@ def test_api_config_fallback(client, monkeypatch, tmp_path):
 
 def test_api_config_served_state(client, monkeypatch):
     c, _ = client
-    served = {"model": "biref-lite", "port": 9000}
+    served = {"default_model": "biref-lite", "port": 9000}
     monkeypatch.setitem(web._state, "config", served)
     assert c.get("/api/config").json() == served
 

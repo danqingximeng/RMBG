@@ -4,7 +4,8 @@
 ~/.config/rmbg/config.yaml（`-c/--config` 可覆盖），不主动创建。
 
 字段（全可选）：
-    model            默认模型别名（缺省 inspyrenet）
+    default_model    默认模型别名（缺省 inspyrenet）
+    allowed_models   模型白名单（缺省全部允许），仅白名单内模型可被请求/预载
     host             serve 绑定地址（默认 127.0.0.1）
     port             serve 端口（默认 8123）
     idle_unload_min  手动 daemon 空闲 N 分钟后卸载模型权重（默认 5，0=永不）
@@ -18,7 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import yaml
-from standalone.model_names import DEFAULT_MODEL
+from standalone.model_names import DEFAULT_MODEL, MODEL_ALIASES
 
 DEFAULT_CONFIG_DIR = Path.home() / ".config" / "rmbg"
 DEFAULT_CONFIG_FILE = DEFAULT_CONFIG_DIR / "config.yaml"
@@ -35,7 +36,8 @@ class ConfigError(RuntimeError):
 
 @dataclass
 class Config:
-    model: str | None = None
+    default_model: str | None = None
+    allowed_models: list[str] | None = None
     host: str = DEFAULT_HOST
     port: int = DEFAULT_PORT
     idle_unload_min: float = DEFAULT_IDLE_UNLOAD_MIN
@@ -54,7 +56,43 @@ class Config:
         data = yaml.safe_load(config_path.read_text()) or {}
         if not isinstance(data, dict):
             raise ConfigError(f"config {config_path} must be a YAML mapping")
-        cfg.model = data.get("model")
+        dm = data.get("default_model")
+        if dm is not None:
+            if not isinstance(dm, str) or not dm.strip():
+                raise ConfigError(f"invalid 'default_model' in config: {dm!r}")
+            dm = dm.strip()
+            if dm not in MODEL_ALIASES:
+                raise ConfigError(
+                    f"invalid 'default_model' in config: {dm!r}. "
+                    f"available: {', '.join(sorted(MODEL_ALIASES))}"
+                )
+            cfg.default_model = dm
+        # allowed_models: optional whitelist; when set, only those aliases are exposed
+        raw_allowed = data.get("allowed_models")
+        if raw_allowed is not None:
+            if not isinstance(raw_allowed, list):
+                raise ConfigError(
+                    f"invalid 'allowed_models' in config: {raw_allowed!r}"
+                )
+            if len(raw_allowed) == 0:
+                raise ConfigError(
+                    "invalid 'allowed_models' in config: must be non-empty list"
+                )
+            normalized: list[str] = []
+            seen: set[str] = set()
+            for entry in raw_allowed:
+                if not isinstance(entry, str) or not entry.strip():
+                    raise ConfigError(f"invalid 'allowed_models' entry: {entry!r}")
+                alias = entry.strip()
+                if alias not in MODEL_ALIASES:
+                    raise ConfigError(
+                        f"invalid 'allowed_models' entry: {alias!r}. "
+                        f"available: {', '.join(sorted(MODEL_ALIASES))}"
+                    )
+                if alias not in seen:
+                    seen.add(alias)
+                    normalized.append(alias)
+            cfg.allowed_models = normalized
         cfg.host = data.get("host", DEFAULT_HOST)
         try:
             cfg.port = int(data.get("port", DEFAULT_PORT))
@@ -73,14 +111,27 @@ class Config:
             if not isinstance(preload, bool):
                 raise ConfigError(f"invalid 'preload' in config: {preload!r}")
             cfg.preload = preload
+        # default_model must be in allowed_models when both set
+        if cfg.allowed_models is not None and cfg.default_model is not None:
+            if cfg.default_model not in cfg.allowed_models:
+                raise ConfigError(
+                    f"invalid 'default_model' {cfg.default_model!r}: "
+                    f"not in 'allowed_models' {cfg.allowed_models!r}"
+                )
         return cfg
 
     def resolve_model(self) -> str:
-        return self.model or DEFAULT_MODEL
+        return self.default_model or DEFAULT_MODEL
+
+    def resolve_allowed(self) -> set[str] | None:
+        if self.allowed_models is None:
+            return None
+        return set(self.allowed_models)
 
     def to_dict(self) -> dict:
         return {
-            "model": self.model,
+            "default_model": self.default_model,
+            "allowed_models": self.allowed_models,
             "host": self.host,
             "port": self.port,
             "idle_unload_min": self.idle_unload_min,

@@ -147,8 +147,22 @@ def _err_payload(msg, status=400):
 
 
 def _valid_models():
-    """别名 + 原始节点名（_resolve 对原名是透传的，两者都合法）。"""
-    return set(MODEL_ALIASES) | set(MODEL_ALIASES.values())
+    """别名 + 原始节点名（_resolve 对原名是透传的，两者都合法）。受 allowed_models 白名单约束。"""
+    # Serve 已运行时优先用 _state 中的生效配置（支持 -c 自定义路径）
+    if _state.get("config") is not None:
+        am = _state["config"].get("allowed_models")
+        if am is not None:
+            allowed = set(am)
+            allowed_originals = {
+                MODEL_ALIASES[a] for a in allowed if a in MODEL_ALIASES
+            }
+            return allowed | allowed_originals
+        return set(MODEL_ALIASES) | set(MODEL_ALIASES.values())
+    allowed = rmbg_core._allowed_set()
+    if allowed is None:
+        return set(MODEL_ALIASES) | set(MODEL_ALIASES.values())
+    allowed_originals = {MODEL_ALIASES[a] for a in allowed if a in MODEL_ALIASES}
+    return allowed | allowed_originals
 
 
 def _decode_data_uri(uri):
@@ -180,9 +194,12 @@ def _process(images, opts):
     """同步推理（线程池里跑，别阻塞事件循环）。images: [(filename, bytes)]。"""
     try:
         model = opts.get("model") or _state["model_default"]
-        if model not in _valid_models():
+        valid = _valid_models()
+        if model not in valid:
+            allowed = rmbg_core._allowed_set()
+            hint = sorted(allowed) if allowed is not None else sorted(MODEL_ALIASES)
             return _err_payload(
-                f"unknown model '{model}'. available: {', '.join(sorted(MODEL_ALIASES))}",
+                f"unknown model '{model}'. available: {', '.join(hint)}",
                 400,
             )
         data_items = []
@@ -366,9 +383,10 @@ def serve(
     )
 
     if preload and preload_model not in _valid_models():
+        allowed = rmbg_core._allowed_set()
+        hint = sorted(allowed) if allowed is not None else sorted(MODEL_ALIASES)
         print(
-            f"error: unknown model '{preload_model}'. "
-            f"available: {', '.join(sorted(MODEL_ALIASES))}",
+            f"error: unknown model '{preload_model}'. available: {', '.join(hint)}",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -379,7 +397,8 @@ def serve(
     _state["model_default"] = model_default
     # 生效配置（CLI 合并后）直接落 dict，/api/config 原样返回
     _state["config"] = {
-        "model": cfg.model,
+        "default_model": cfg.default_model,
+        "allowed_models": cfg.allowed_models,
         "host": host,
         "port": port,
         "idle_unload_min": idle_unload_min,

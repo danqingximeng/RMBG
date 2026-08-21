@@ -11,8 +11,10 @@ from standalone.rmbg_config import (
 
 def test_missing_file_gives_defaults(tmp_path):
     cfg = Config.load(tmp_path / "none.yaml")
-    assert cfg.model is None
+    assert cfg.default_model is None
+    assert cfg.allowed_models is None
     assert cfg.resolve_model() == DEFAULT_MODEL
+    assert cfg.resolve_allowed() is None
     assert cfg.host == "127.0.0.1"
     assert cfg.port == DEFAULT_PORT
     assert cfg.preload is True
@@ -23,7 +25,8 @@ def test_missing_file_gives_defaults(tmp_path):
 def test_load_all_fields(tmp_path):
     f = tmp_path / "config.yaml"
     f.write_text(
-        "model: biref-lite\n"
+        "default_model: biref-lite\n"
+        "allowed_models: [biref-lite, inspyrenet]\n"
         "host: 0.0.0.0\n"
         "port: 9000\n"
         "idle_unload_min: 2.5\n"
@@ -31,15 +34,18 @@ def test_load_all_fields(tmp_path):
         "preload: false\n"
     )
     cfg = Config.load(f)
-    assert cfg.model == "biref-lite"
+    assert cfg.default_model == "biref-lite"
+    assert cfg.allowed_models == ["biref-lite", "inspyrenet"]
     assert cfg.resolve_model() == "biref-lite"
+    assert cfg.resolve_allowed() == {"biref-lite", "inspyrenet"}
     assert cfg.host == "0.0.0.0"
     assert cfg.port == 9000
     assert cfg.idle_unload_min == 2.5
     assert cfg.idle_kill_min == 0.0
     assert cfg.preload is False
     d = cfg.to_dict()
-    assert d["model"] == "biref-lite" and d["port"] == 9000
+    assert d["default_model"] == "biref-lite" and d["port"] == 9000
+    assert d["allowed_models"] == ["biref-lite", "inspyrenet"]
     assert d["config_path"] == str(f)
 
 

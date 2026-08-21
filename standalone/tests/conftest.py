@@ -19,3 +19,25 @@ if "RMBG" not in sys.modules:
     fake.NODE_CLASS_MAPPINGS = {}
     fake.NODE_DISPLAY_NAME_MAPPINGS = {}
     sys.modules["RMBG"] = fake
+
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _isolate_config(monkeypatch, tmp_path):
+    """Isolate tests from user's real ~/.config/rmbg/config.yaml (whitelist).
+
+    Without this, a real whitelist (e.g. your 5) would make tests that use
+    biref-lite fail with 400. Tests mock remove_bg so they never download.
+    """
+    import standalone.rmbg_config as rc
+    import standalone.rmbg_web as web
+
+    missing = tmp_path / "rmbg_test_missing.yaml"
+    monkeypatch.setattr(rc, "DEFAULT_CONFIG_FILE", missing)
+    # clear daemon state that caches allowed_models/default_model
+    monkeypatch.setitem(web._state, "config", None)
+    from standalone.model_names import DEFAULT_MODEL as _DM
+
+    monkeypatch.setitem(web._state, "model_default", _DM)
+    yield

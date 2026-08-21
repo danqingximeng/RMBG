@@ -36,7 +36,8 @@ CLI run 会自动复用/拉起守护：端口有 daemon 就 HTTP 转发（输出
 优先级 **CLI 参数 > config > 内建默认**；`-c/--config` 可覆盖路径。加载在 `standalone/rmbg_config.py`（`Config.load()`，风格与 upscayl-py 的 `upscayl/config.py` 一致）：
 
 ```yaml
-model: biref-lite # 默认模型：run 的 -m 缺省、serve 的预载模型、/api/models 的 default 三处联动
+default_model: biref-toon # 默认模型：run 的 -m 缺省、serve 的预载模型、/api/models 的 default 三处联动
+allowed_models: [inspyrenet, rmbg2, ben2, biref-toon, lucida] # 白名单：仅允许的模型（缺省全部允许），白名单前置校验，越权请求 400 且不触发下载
 host: 127.0.0.1 # serve 绑定地址
 port: 8123 # serve 端口，也是 run 的 daemon 端口
 idle_unload_min: 5 # 手动守护闲置 N 分钟后卸载权重（0=永不）
