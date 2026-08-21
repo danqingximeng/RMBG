@@ -10,3 +10,4 @@ torchvision==0.28.0+cpu
 fastapi>=0.115
 uvicorn>=0.30
 python-multipart>=0.0.9
+einops>=0.8.2
